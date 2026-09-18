@@ -32,14 +32,28 @@ this image; `/app/docker/scripts/init-or-migrate.sh` is correct.
 | Mode | Command | Notes |
 |---|---|---|
 | App | default `CMD` (`yarn start` → `yarn mercato server start`) | Listens on `PORT` (3000), binds `HOSTNAME=0.0.0.0` — both baked into the image |
-| Worker | `["mercato", "workflows:startWorker"]` | **unverified**: confirm the subcommand name against the built image |
+| Worker | `["mercato", "queue", "worker", "--all"]` | See below — the `workflows:startWorker` command in the original infra brief does not exist in this app |
 | Migrations | `["/app/docker/scripts/init-or-migrate.sh"]` | One-off task, runs before the service rolls |
 
-`@open-mercato/cli` is a production dependency and the runner stage keeps production
-deps, so `mercato` should be on `PATH` — **unverified** until `docker run --rm <img> which
-mercato` is run. This matters: `init-or-migrate.sh` has a rescue path that runs
-`yarn install` when the CLI is missing. On Fargate that either takes very long or fails.
-Once the CLI is confirmed present, that path should become a loud `exit 1`.
+**The worker command from the infra brief is wrong for this app.** The CLI takes
+`mercato <module> <command>`, never a colon-separated form, and `workflows` is not among
+the enabled modules (`src/modules.ts`) — so `mercato workflows:startWorker` fails
+immediately. Workers live under the `queue` module:
+
+- `mercato queue worker <queueName>` runs one queue.
+- `mercato queue worker --all` runs every discovered queue in one process.
+
+This app registers **18** queues (notifications, events, fulltext-indexing,
+vector-indexing, attachments-quota-recovery, messages-email, the communication-channels
+family, and more), so a container pinned to a single queue name would silently leave the
+other 17 unprocessed. Use `--all`.
+
+`--concurrency=<n>` overrides the per-queue default if the worker needs throttling.
+
+`@open-mercato/cli` is a production dependency and `node_modules/.bin/mercato` is a real
+bin shim, so `mercato` resolves on `PATH`. The rescue path in `init-or-migrate.sh` that
+runs `yarn install` when the CLI is missing should therefore never fire; turning it into
+a loud `exit 1` is now safe.
 
 ## Health
 
