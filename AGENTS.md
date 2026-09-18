@@ -8,6 +8,19 @@ Read and route through the rest of this file; its `Always`, `Never`, and Task Ro
 <!-- CODEX_ENFORCEMENT_RULES_END -->
 
 
+## Hackathon Mode
+
+This repo is a hackathon project. Delivery speed beats completeness: we build solidly, but we consciously accept risk and simplification until it actually bites us during the hackathon.
+
+- Default to the smallest working slice; ship it, then improve only what demoing or the next slice forces.
+- A documented tradeoff is allowed without asking: hardcoded config/seed data, one happy path, shallow error handling, `any` in a leaf, skipped edge cases, no abstraction until the third use.
+- Accept process shortcuts: lean specs over exhaustive ones, tests only where a regression would cost more time than the test, docs only where the next person is blocked without them. The Ask First list stays fully in force.
+- Record every shortcut inline as `// HACK(hackathon): <what, why, what breaks>` so it is greppable later. Do not silently degrade behavior.
+- Keep the demo path honest: never fake results, stub a provider, or swallow an error to make a screen look green. Say plainly what is stubbed.
+- Non-negotiable even here (these bite within hours, not months): tenant/org scoping, no edits to generated files or `node_modules`, no committed secrets, no destructive DB action without asking, no guessed installed contract.
+- Re-tighten a shortcut the moment it bites: a second bug from the same hack, a blocked teammate, or a broken demo turns it into work now, not backlog.
+- When a rule elsewhere in this file demands ceremony that does not change the demo, prefer the fast path and note it; when it protects data, scope, or the build, follow it.
+
 Route first; never probe unmatched context.
 
 ## Always
@@ -22,7 +35,7 @@ Route first; never probe unmatched context.
 - Run `yarn db:generate`, review scoped SQL/snapshot, and ask before applying it.
 - Run `yarn generate` after discovery files/`src/modules.ts`/routes/pages/events/widgets/agents/tools/workflows change.
 - Contract-surface changes (route/schema/ID/export/seam/signature/event payload/CLI) MUST read `.ai/guides/upstream/BACKWARD_COMPATIBILITY.md`; tenant/org scope alone is not a contract.
-- Localize strings; use shared UI/tokens and cover loading/empty/error/conflict/keyboard/a11y.
+- Localize strings; use shared UI/tokens and cover loading/empty/error/conflict/keyboard/a11y — under Hackathon Mode, loading + error are the demo minimum, the rest may be deferred with a `HACK(hackathon)` note.
 
 ## Ask First
 
@@ -39,6 +52,31 @@ Route first; never probe unmatched context.
 ## Validation
 
 Broad: `yarn generate && yarn typecheck && yarn lint && yarn ds:check && yarn test && yarn build`; integration: `yarn test:integration:ephemeral`. Never migrate to validate.
+
+Hackathon Mode gate: `yarn generate && yarn typecheck && yarn lint` after every slice — a red build blocks everyone, so this is never skipped. `yarn test` / `yarn build` / integration run before a demo, a merge to `main`, or any change touching data or scoping; skipping them mid-slice is fine and needs no note.
+
+## Preflight before PR
+
+No PR is opened without a green local preflight. CI builds an image, it does not gate correctness, so a red check found by a reviewer costs hours we do not have. Run it on the branch, with the changes staged, and paste the outcome in the PR description.
+
+Always, in this order — first failure stops the run and gets fixed before re-running:
+
+1. `yarn generate` — discovery output must be regenerated and committed, never left dirty.
+2. `yarn typecheck`
+3. `yarn lint`
+4. `yarn test`
+5. `yarn build`
+
+Conditional, by what the diff touches:
+
+- Rendered UI or user-facing strings: `yarn ds:check` and `yarn i18n:check-hardcoded`.
+- Entities, migrations, API routes, commands, or anything scoping-related: `yarn test:integration:ephemeral`.
+- `Dockerfile`, `docker/**`, compose files, or `.github/workflows/**`: `docker buildx build --platform linux/amd64 --target runner .` locally (the deploy target is x86_64; a default build on Apple silicon produces an image ECS refuses), because CI is the only other place that would catch it and only after the PR exists.
+- Schema change: `yarn db:generate` plus a read of the produced SQL/snapshot. Never migrate a real database to validate.
+
+Then check `git status` is clean apart from intended files, with no `.env`, secret, or `.mercato/generated` artifact staged.
+
+Preflight is not waived by Hackathon Mode. Skipping a step is allowed only when a step is genuinely unrelated to the diff, and the PR description says which step was skipped and why.
 
 ## Three-Axis Context Assembler
 
@@ -97,6 +135,8 @@ Match every work-unit row; OPEN its skill before selection.
 `framework-context`: resolve one named fact first. Use bounded source only if the guide leaves current behavior, authorization, dependents, or safest customization seam unresolved; never for “installed contracts” alone.
 
 ### Axis 3 — SDLC and Delivery
+
+Hackathon Mode does not waive the spec gate — writing the spec is cheap and it is what keeps parallel work from colliding. It only makes the spec leaner: cover problem, slice, data/contract shape, and open risks; skip exhaustive alternatives, rollout, and phase ceremony unless the work is multi-phase.
 
 Spec gate before code: new capability/architecture/schema/API contract/cross-module/multi-phase -> spec first (`spec-first`); covering `.ai/specs` match -> reuse and update it (`reuse-spec`); bug fix/minor fix/docs/dependency/isolated refactor -> proceed (`direct`); only the request's explicit words waive a feature spec; workflow-changing ambiguity -> ask once (`ask`). Then `om-module-scaffold` starts at `src/modules/example/README.md`.
 
