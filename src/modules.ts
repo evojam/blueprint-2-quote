@@ -11,6 +11,7 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'configs', from: '@open-mercato/core' },
   { id: 'entities', from: '@open-mercato/core' },
   { id: 'query_index', from: '@open-mercato/core' },
+  { id: 'progress', from: '@open-mercato/core' },
   { id: 'api_docs', from: '@open-mercato/core' },
   { id: 'audit_logs', from: '@open-mercato/core' },
   { id: 'notifications', from: '@open-mercato/core' },
@@ -28,8 +29,11 @@ export const enabledModules: ModuleEntry[] = [
   // runtime, and sales declares `requires: ['catalog', 'customers', 'dictionaries']`.
   { id: 'catalog', from: '@open-mercato/core' },
   { id: 'sales', from: '@open-mercato/core' },
+  { id: 'business_rules', from: '@open-mercato/core' },
+  { id: 'workflows', from: '@open-mercato/core' },
   { id: 'communication_channels', from: '@open-mercato/core' },
   { id: 'ai_assistant', from: '@open-mercato/ai-assistant' },
+  { id: 'inbox_ops', from: '@open-mercato/core' },
 ]
 
 const enterpriseModulesEnabled = parseBooleanWithDefault(process.env.OM_ENABLE_ENTERPRISE_MODULES, false)
