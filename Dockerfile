@@ -6,6 +6,17 @@ ARG OPEN_MERCATO_DOCKER_REGISTRY_HOST=host.docker.internal
 ARG NEXT_PUBLIC_DOCUMENTS_COLLAB_URL
 ENV NEXT_PUBLIC_DOCUMENTS_COLLAB_URL=${NEXT_PUBLIC_DOCUMENTS_COLLAB_URL}
 
+# src/modules.ts reads these when it assembles enabledModules, and `yarn generate`
+# writes entity ids, the registry, workflows and OpenAPI from that list. They are
+# therefore BUILD-time inputs, not just runtime ones: generated without them, the
+# metadata has no WorkflowDefinition and the Agent Orchestrator cannot start no
+# matter what the ECS task definition sets. With them: 264 API paths and 218
+# artifacts, against 208 and 195 without.
+ARG OM_ENABLE_ENTERPRISE_MODULES=true
+ARG OM_ENABLE_ENTERPRISE_MODULES_AGENTS=true
+ENV OM_ENABLE_ENTERPRISE_MODULES=${OM_ENABLE_ENTERPRISE_MODULES} \
+    OM_ENABLE_ENTERPRISE_MODULES_AGENTS=${OM_ENABLE_ENTERPRISE_MODULES_AGENTS}
+
 WORKDIR /app
 
 RUN apk add --no-cache python3 make g++ ca-certificates openssl
@@ -75,11 +86,18 @@ ARG CONTAINER_PORT=3000
 ARG DOCUMENTS_COLLAB_PORT=4101
 ARG OPEN_MERCATO_DOCKER_REGISTRY_HOST=host.docker.internal
 
+# Must match what the builder generated from; the task definition may still
+# override them, but the default should not contradict the baked metadata.
+ARG OM_ENABLE_ENTERPRISE_MODULES=true
+ARG OM_ENABLE_ENTERPRISE_MODULES_AGENTS=true
+
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PATH=/app/node_modules/.bin:$PATH \
     PORT=${CONTAINER_PORT} \
     HOSTNAME=0.0.0.0 \
+    OM_ENABLE_ENTERPRISE_MODULES=${OM_ENABLE_ENTERPRISE_MODULES} \
+    OM_ENABLE_ENTERPRISE_MODULES_AGENTS=${OM_ENABLE_ENTERPRISE_MODULES_AGENTS} \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Chromium backs the Documents PDF export (puppeteer-core); the fonts keep
