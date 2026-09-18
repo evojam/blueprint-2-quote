@@ -63,6 +63,11 @@ next-env.d.ts
 # generated files
 .mercato/*
 !.mercato/railway.json
+# Hand-written compatibility shims for a generator path bug; see the header of
+# .mercato/lib/sdk/outcomeSchema.ts. They must be in the repo, because the CI
+# image build has no other way to obtain them.
+!.mercato/lib/
+!.mercato/lib/**
 generated/
 src/generated/
 .test-cache.json
