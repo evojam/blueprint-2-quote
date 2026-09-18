@@ -52,7 +52,7 @@ ARG OPEN_MERCATO_DOCKER_REGISTRY_HOST=host.docker.internal
 
 WORKDIR /app
 
-RUN apk add --no-cache python3 make g++ ca-certificates openssl
+RUN apk add --no-cache python3 make g++ ca-certificates openssl poppler-utils
 RUN corepack enable
 
 COPY package.json yarn.lock .yarnrc.yml ./
@@ -100,9 +100,10 @@ ENV NODE_ENV=production \
     OM_ENABLE_ENTERPRISE_MODULES_AGENTS=${OM_ENABLE_ENTERPRISE_MODULES_AGENTS} \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Chromium backs the Documents PDF export (puppeteer-core); the fonts keep
-# rendered text from coming out as empty boxes on Alpine.
-RUN apk add --no-cache ca-certificates chromium font-noto ttf-freefont openssl
+# Chromium backs the Documents PDF export (puppeteer-core); Poppler backs the
+# property-document PDF agents; the fonts keep rendered text from coming out as
+# empty boxes on Alpine.
+RUN apk add --no-cache ca-certificates chromium font-noto ttf-freefont openssl poppler-utils
 RUN corepack enable
 
 # The runtime user is created before anything lands in /app, and every later step

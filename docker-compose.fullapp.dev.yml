@@ -21,6 +21,7 @@ services:
       - app_next:/app/.next
       - init_marker:/tmp/init-marker
       - attachments_storage:/app/storage
+      - opencode_work:/home/opencode/work
     ports:
       - "${APP_PORT:-3000}:3000"
     environment:
@@ -48,6 +49,11 @@ services:
       OM_ENABLE_ENTERPRISE_MODULES: ${OM_ENABLE_ENTERPRISE_MODULES:-false}
       OM_ENABLE_ENTERPRISE_MODULES_AGENTS: ${OM_ENABLE_ENTERPRISE_MODULES_AGENTS:-false}
       OM_AI_PROVIDER: ${OM_AI_PROVIDER:-openai}
+      OM_OPENCODE_FILES_ENABLED: ${OM_OPENCODE_FILES_ENABLED:-true}
+      OM_OPENCODE_WORKSPACE_ROOT: /home/opencode/work
+      OM_OPENCODE_WORKSPACE_ROOT_CONTAINER: /home/opencode/work
+      OM_AGENT_ARTIFACT_MAX_COUNT: ${OM_AGENT_ARTIFACT_MAX_COUNT:-50}
+      OM_OPENCODE_POOL_SIZE: ${OM_OPENCODE_POOL_SIZE:-1}
       OM_AI_MODEL: ${OM_AI_MODEL:-gpt-5-mini}
       OPENCODE_URL: ${OPENCODE_URL:-http://opencode:4096}
       OPENCODE_PASSWORD: ${OPENCODE_PASSWORD:-}
@@ -58,6 +64,8 @@ services:
       GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-}
       MEILISEARCH_HOST: http://meilisearch:7700
       MEILISEARCH_API_KEY: ${MEILISEARCH_API_KEY:-meilisearch-dev-key}
       MEILISEARCH_MASTER_KEY: ${MEILISEARCH_MASTER_KEY:-meilisearch-dev-key}
@@ -174,13 +182,17 @@ services:
       GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-}
       # In-network MCP wiring. MCP_SERVER_API_KEY (env) wins when set; the file
       # fallback reads the key the mcp service provisioned into the shared
       # volume after waiting for the MCP /health endpoint.
       OPENCODE_MCP_URL: ${OPENCODE_MCP_URL:-http://mcp:3001/mcp}
       MCP_SERVER_API_KEY: ${MCP_SERVER_API_KEY:-}
       MCP_SERVER_API_KEY_FILE: /run/mcp-shared/mcp-api-key
-      OM_OPENCODE_FILES_ENABLED: ${OM_OPENCODE_FILES_ENABLED:-false}
+      OM_OPENCODE_FILES_ENABLED: ${OM_OPENCODE_FILES_ENABLED:-true}
+      OM_OPENCODE_WORKSPACE_ROOT: /home/opencode/work
+      OM_OPENCODE_WORKSPACE_ROOT_CONTAINER: /home/opencode/work
     volumes:
       - mcp_shared:/run/mcp-shared:ro
       - ./docker/opencode/entrypoint.sh:/home/opencode/entrypoint.sh:ro
@@ -192,6 +204,7 @@ services:
       # Corporate CA bundle; the entrypoint exports SSL_CERT_FILE /
       # NODE_EXTRA_CA_CERTS when certificates are present.
       - ./docker/opencode/certs:/run/om-certs:ro
+      - opencode_work:/home/opencode/work
     depends_on:
       mcp:
         condition: service_started
@@ -240,6 +253,7 @@ services:
       - .:/app
       - app_node_modules:/app/node_modules
       - mcp_shared:/run/mcp-shared
+      - opencode_work:/home/opencode/work
     environment:
       NODE_ENV: ${NODE_ENV:-development}
       NODE_OPTIONS: ${MCP_NODE_OPTIONS:---max-old-space-size=2048}
@@ -268,9 +282,15 @@ services:
       OM_INIT_SUPERADMIN_EMAIL: ${OM_INIT_SUPERADMIN_EMAIL:-}
       OM_ENABLE_ENTERPRISE_MODULES: ${OM_ENABLE_ENTERPRISE_MODULES:-false}
       OM_ENABLE_ENTERPRISE_MODULES_AGENTS: ${OM_ENABLE_ENTERPRISE_MODULES_AGENTS:-false}
+      OM_OPENCODE_FILES_ENABLED: ${OM_OPENCODE_FILES_ENABLED:-true}
+      OM_OPENCODE_WORKSPACE_ROOT: /home/opencode/work
+      OM_OPENCODE_WORKSPACE_ROOT_CONTAINER: /home/opencode/work
+      OM_OPENCODE_POOL_SIZE: ${OM_OPENCODE_POOL_SIZE:-1}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY:-}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-}
       MCP_PORT: "3001"
       MCP_SERVER_API_KEY_FILE: /run/mcp-shared/mcp-api-key
       MCP_WAIT_FOR_APP_TIMEOUT: ${MCP_WAIT_FOR_APP_TIMEOUT:-1800}
@@ -366,6 +386,7 @@ volumes:
   postgres_data:
   # Shared MCP API key file: the mcp service provisions it, opencode reads it.
   mcp_shared:
+  opencode_work:
   redis_data:
   meilisearch_data:
   localstack_data:

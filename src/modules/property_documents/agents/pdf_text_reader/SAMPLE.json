@@ -1,0 +1,12 @@
+{
+  "task": "Return the complete extracted text of the attached PDF.",
+  "__files": {
+    "attachments": [
+      {
+        "attachmentId": "00000000-0000-4000-8000-000000000000",
+        "as": "input.pdf",
+        "ocrText": true
+      }
+    ]
+  }
+}

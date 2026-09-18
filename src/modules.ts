@@ -1,3 +1,4 @@
+
 // Central place to enable modules and their source.
 // - id: module id (plural snake_case; special cases: 'auth')
 // - from: '@open-mercato/core' | '@app' | custom alias/path in future
@@ -63,4 +64,5 @@ if (enterpriseModulesEnabled && enterpriseAgentsEnabled) {
   // brand-new module. Its source ships in every preset; it imports the
   // orchestrator SDK, so it is only enabled alongside it.
   enabledModules.push({ id: 'agent_examples', from: '@app' })
+  enabledModules.push({ id: 'property_documents', from: '@app' })
 }
