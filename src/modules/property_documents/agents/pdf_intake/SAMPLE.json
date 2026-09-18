@@ -1,0 +1,10 @@
+{
+  "task": "Parse the textual brief and extract every plan-view drawing page.",
+  "__files": {
+    "attachments": [
+      {
+        "attachmentId": "00000000-0000-4000-8000-000000000000"
+      }
+    ]
+  }
+}

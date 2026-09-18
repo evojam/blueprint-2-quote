@@ -1,6 +1,6 @@
 # Lessons
 
-This catalog indexes 0 focused lessons without loading their full text. Route the task first, then read only records whose **modules**, standalone-harness **areas**, or **topics** match the work.
+This catalog indexes 1 focused lessons without loading their full text. Route the task first, then read only records whose **modules**, standalone-harness **areas**, or **topics** match the work.
 
 ## How to use this catalog
 
@@ -25,3 +25,7 @@ rg -l '"<area>"|"<module>"|"<topic>"' .ai/lessons/*.md
 - Run `node scripts/check-lessons.mjs` before committing.
 
 ## Catalog
+
+### ai-workflow
+
+- [Carry file-agent options through runtime and policy generation](lessons/file-agent-options-need-runtime-and-policy.md) — area:ai-workflow,framework-context; module:agent_orchestrator,property_documents; topic:file-agents,generated-files,version-skew,manifest-validation,artifact-outcomes

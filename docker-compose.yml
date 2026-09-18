@@ -30,13 +30,17 @@ services:
       GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-}
       # The MCP server runs on the HOST. MCP_SERVER_API_KEY (env) wins when set;
       # the file fallback reads the key `yarn dev` provisions on the host.
       OPENCODE_MCP_URL: ${OPENCODE_MCP_URL:-http://host.docker.internal:3001/mcp}
       MCP_SERVER_API_KEY: ${MCP_SERVER_API_KEY:-}
       MCP_SERVER_API_KEY_FILE: /run/mcp-shared/mcp-api-key
       OPENCODE_MCP_KEY_WAIT_SECONDS: ${OPENCODE_MCP_KEY_WAIT_SECONDS:-1800}
-      OM_OPENCODE_FILES_ENABLED: ${OM_OPENCODE_FILES_ENABLED:-false}
+      OM_OPENCODE_FILES_ENABLED: ${OM_OPENCODE_FILES_ENABLED:-true}
+      OM_OPENCODE_WORKSPACE_ROOT: /home/opencode/work
+      OM_OPENCODE_WORKSPACE_ROOT_CONTAINER: /home/opencode/work
     ports:
       - "${OPENCODE_PORT:-4096}:4096"
     volumes:

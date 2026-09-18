@@ -13,6 +13,7 @@ import {
   resolveUnexpectedExitCode,
 } from './dev-runtime-log-policy.mjs'
 import { getProcessTreeMemorySample } from './dev-memory-monitor.mjs'
+import { hardenPropertyPdfAgentFile } from './enable-property-pdf-agent-files.mjs'
 
 function resolveSplashHelpersImport() {
   const candidates = [
@@ -1505,6 +1506,7 @@ async function runInitialGenerate() {
       return
     }
     markMemoryTrace('generate:end', 'Generating app artifacts', { durationMs: Date.now() - startedAt })
+    hardenPropertyPdfAgentFile()
     return
   }
 
@@ -1536,6 +1538,8 @@ async function runInitialGenerate() {
     shutdown(exitCode)
     return
   }
+
+  hardenPropertyPdfAgentFile()
 
   updateSplashState({
     phase: 'Waiting for live runtime',
@@ -1678,6 +1682,7 @@ function classifyWatchLine(line) {
     }
   }
   if (line === '[generate:watch] Generators completed.') {
+    hardenPropertyPdfAgentFile()
     return {
       type: 'status',
       message: '♻️ Generated files refreshed',
