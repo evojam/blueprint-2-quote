@@ -2,8 +2,8 @@
 
 Target shape: one ECS task with two containers (app + worker), a separate one-off
 migration task, ALB in front, RDS behind. This file is the contract between the repo
-and the Terraform stack. Anything marked **unverified** could not be checked from a
-checkout without `node_modules` and is settled by the first built image.
+and the Terraform stack. Facts below were verified against a local `linux/amd64` build of the `runner`
+stage unless explicitly marked **unverified**.
 
 ## Image
 
@@ -22,7 +22,9 @@ checkout without `node_modules` and is settled by the first built image.
 |---|---|
 | `WORKDIR` | `/app` |
 | Migration script | `/app/docker/scripts/init-or-migrate.sh` (executable bit set in git and re-applied by `chmod +x` in the build) |
-| `PATH` | includes `/app/node_modules/.bin`, so bare `mercato` resolves |
+| `PATH` | includes `/app/node_modules/.bin`; verified that `mercato` resolves to `/app/node_modules/.bin/mercato` |
+| Runtime user | `omuser` (uid 1001), owns `/app` |
+| Node | v24.21.0, on `x86_64` |
 
 The reusable workflow's default of `/docker/scripts/init-or-migrate.sh` is **wrong** for
 this image; `/app/docker/scripts/init-or-migrate.sh` is correct.
@@ -32,7 +34,7 @@ this image; `/app/docker/scripts/init-or-migrate.sh` is correct.
 | Mode | Command | Notes |
 |---|---|---|
 | App | default `CMD` (`yarn start` → `yarn mercato server start`) | Listens on `PORT` (3000), binds `HOSTNAME=0.0.0.0` — both baked into the image |
-| Worker | `["mercato", "queue", "worker", "--all"]` | See below — the `workflows:startWorker` command in the original infra brief does not exist in this app |
+| Worker | `["mercato", "queue", "worker", "--all"]` | Verified in the built image: 18 queues discovered, CLI starts without a database. The `workflows:startWorker` command in the original infra brief does not exist in this app |
 | Migrations | `["/app/docker/scripts/init-or-migrate.sh"]` | One-off task, runs before the service rolls |
 
 **The worker command from the infra brief is wrong for this app.** The CLI takes
@@ -188,7 +190,33 @@ irrelevant to the deployment.
 ## PDF export
 
 The image ships Chromium plus fonts, and `PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium`.
-No extra configuration. It costs roughly 250–300 MB of image size.
+No extra configuration. Verified in the built image: Chromium 152 at `/usr/bin/chromium`,
+with the `freefont`, `noto` and `opensans` font families present.
+
+## Image size
+
+The `runner` image is **10.8 GB uncompressed**, measured on a local `linux/amd64` build:
+
+| Layer | Size |
+|---|---|
+| `adduser && chown -R omuser:omuser /app` | 2.84 GB |
+| `yarn workspaces focus --all --production` | 3.15 GB |
+| `.mercato/next` build output | 1.05 GB |
+| Chromium + fonts | 819 MB |
+| node:24-alpine base | 174 MB |
+
+Two consequences for the task definition:
+
+- Fargate's default ephemeral storage is 20 GiB and holds the image **uncompressed**.
+  10.8 GB leaves usable headroom but is worth watching; raise `ephemeralStorage` if
+  attachments or temporary files are written to disk.
+- Every deploy pulls this, so task start-up is dominated by the pull. Budget for it when
+  setting the ALB deregistration delay and any deployment timeout.
+
+The `chown -R` layer is pure duplication: it rewrites every file under `/app` into a new
+layer, so it costs almost exactly what the files it touches already cost. Replacing it
+with `COPY --chown` on the copies above would cut roughly 2.8 GB. Not done here — it
+needs a verified rebuild, and the image works as it stands.
 
 ## Task definition matrix
 
