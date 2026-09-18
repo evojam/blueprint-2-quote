@@ -23,6 +23,11 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'dictionaries', from: '@open-mercato/core' },
   { id: 'feature_toggles', from: '@open-mercato/core' },
   { id: 'currencies', from: '@open-mercato/core' },
+  // catalog ships product/variant/price primitives; sales owns SalesChannel +
+  // SalesTaxRate, which catalog's product API and price/variant commands read at
+  // runtime, and sales declares `requires: ['catalog', 'customers', 'dictionaries']`.
+  { id: 'catalog', from: '@open-mercato/core' },
+  { id: 'sales', from: '@open-mercato/core' },
   { id: 'communication_channels', from: '@open-mercato/core' },
   { id: 'ai_assistant', from: '@open-mercato/ai-assistant' },
 ]
