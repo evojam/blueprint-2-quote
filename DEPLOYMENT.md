@@ -195,28 +195,36 @@ with the `freefont`, `noto` and `opensans` font families present.
 
 ## Image size
 
-The `runner` image is **10.8 GB uncompressed**, measured on a local `linux/amd64` build:
+Measured on local `linux/amd64` builds. Two numbers matter and they differ, so both are
+given with the method that produced them:
 
-| Layer | Size |
-|---|---|
-| `adduser && chown -R omuser:omuser /app` | 2.84 GB |
-| `yarn workspaces focus --all --production` | 3.15 GB |
-| `.mercato/next` build output | 1.05 GB |
-| Chromium + fonts | 819 MB |
-| node:24-alpine base | 174 MB |
+| | Layer total (pushed, pulled, stored) | Container filesystem |
+|---|---|---|
+| before the slimming | 8.07 GB | 3.66 GB |
+| current | **4.15 GB** | **3.02 GB** |
 
-Two consequences for the task definition:
+Layer total is the sum of `docker history` sizes; the filesystem figure is `du` inside a
+running container. (`docker images` reports a third, larger number — 10.78 GB for the old
+image — because of how it accounts for shared and duplicated layers. The layer sum is the
+one to plan pulls around.)
 
-- Fargate's default ephemeral storage is 20 GiB and holds the image **uncompressed**.
-  10.8 GB leaves usable headroom but is worth watching; raise `ephemeralStorage` if
-  attachments or temporary files are written to disk.
-- Every deploy pulls this, so task start-up is dominated by the pull. Budget for it when
-  setting the ALB deregistration delay and any deployment timeout.
+The gap between the two columns used to be a `RUN chown -R omuser:omuser /app` at the end
+of the runner stage: it rewrote the whole tree into a second layer, which the filesystem
+then collapsed but the registry still had to carry. That step also cost **8 minutes 52
+seconds** of every CI build and contributed to a runner running out of disk during layer
+export. It is gone; ownership is set with `COPY --chown` as files arrive.
 
-The `chown -R` layer is pure duplication: it rewrites every file under `/app` into a new
-layer, so it costs almost exactly what the files it touches already cost. Replacing it
-with `COPY --chown` on the copies above would cut roughly 2.8 GB. Not done here — it
-needs a verified rebuild, and the image works as it stands.
+Turbopack's build cache (645 MB) is likewise deleted in the builder stage rather than
+shipped.
+
+What is left is mostly irreducible: `node_modules` 1.68 GB (production-only already —
+`jest`, `playwright`, `ts-jest` and `eslint` are absent; what remains comes transitively
+from the `@open-mercato` packages), the Next build output, and Chromium at 819 MB.
+
+Fargate's default ephemeral storage is 20 GiB and holds the image uncompressed, so there
+is comfortable headroom now. Every deploy still pulls the image twice — once for the
+migration task, once for the rolling deployment — so the pull remains a real part of
+deploy time.
 
 ## Task definition matrix
 
