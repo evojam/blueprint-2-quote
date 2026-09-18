@@ -75,6 +75,7 @@ src/generated/
 # runtime state
 .events/
 .queue
+.pi/
 
 # uploads and app data
 public/uploads/*

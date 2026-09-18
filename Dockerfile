@@ -1,10 +1,10 @@
 FROM node:24-alpine AS builder
 
-ENV NEXT_TELEMETRY_DISABLED=1 \
-    PATH=/app/node_modules/.bin:$PATH
 ARG OPEN_MERCATO_DOCKER_REGISTRY_HOST=host.docker.internal
 ARG NEXT_PUBLIC_DOCUMENTS_COLLAB_URL
-ENV NEXT_PUBLIC_DOCUMENTS_COLLAB_URL=${NEXT_PUBLIC_DOCUMENTS_COLLAB_URL}
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    PATH=/app/node_modules/.bin:$PATH \
+    NEXT_PUBLIC_DOCUMENTS_COLLAB_URL=${NEXT_PUBLIC_DOCUMENTS_COLLAB_URL}
 
 # src/modules.ts reads these when it assembles enabledModules, and `yarn generate`
 # writes entity ids, the registry, workflows and OpenAPI from that list. They are
