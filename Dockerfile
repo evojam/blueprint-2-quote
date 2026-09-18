@@ -70,23 +70,19 @@ FROM node:24-alpine AS runner
 ARG CONTAINER_PORT=3000
 ARG DOCUMENTS_COLLAB_PORT=4101
 ARG OPEN_MERCATO_DOCKER_REGISTRY_HOST=host.docker.internal
-# Chromium backs the Documents PDF export (puppeteer-core). Build with
-# --build-arg INSTALL_CHROMIUM=1 to include it; PDF export otherwise returns 503.
-ARG INSTALL_CHROMIUM=0
 
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PATH=/app/node_modules/.bin:$PATH \
     PORT=${CONTAINER_PORT} \
+    HOSTNAME=0.0.0.0 \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 WORKDIR /app
 
-RUN if [ "$INSTALL_CHROMIUM" = "1" ]; then \
-      apk add --no-cache ca-certificates chromium openssl; \
-    else \
-      apk add --no-cache ca-certificates openssl; \
-    fi
+# Chromium backs the Documents PDF export (puppeteer-core); the fonts keep
+# rendered text from coming out as empty boxes on Alpine.
+RUN apk add --no-cache ca-certificates chromium font-noto ttf-freefont openssl
 RUN corepack enable
 
 COPY package.json yarn.lock .yarnrc.yml ./
