@@ -27,6 +27,10 @@ RUN yarn install
 COPY . .
 RUN yarn generate
 RUN NODE_ENV=production yarn build
+# Turbopack's build cache is 645 MB of the 999 MB under .mercato/next and is dead
+# weight at runtime. Dropping it here, in the builder, keeps it out of the copy
+# below — deleting it after the COPY would leave it in the layer underneath.
+RUN rm -rf /app/.mercato/next/cache
 
 FROM node:24-alpine AS dev
 
