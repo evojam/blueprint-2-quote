@@ -1,9 +1,11 @@
 # Deployment reference — ECS Fargate
 
 Target shape: one ECS task with two containers (app + worker), a separate one-off
-migration task, ALB in front, RDS behind. This file is the contract between the repo
-and the Terraform stack. Facts below were verified against a local `linux/amd64` build of the `runner`
-stage unless explicitly marked **unverified**.
+migration task, ALB in front, RDS behind. The optional agent plane adds two more
+containers to that task — see [Agent plane](#agent-plane--the-opencode-and-mcp-sidecars).
+This file is the contract between the repo and the Terraform stack. Facts below were
+verified against a local `linux/amd64` build of the `runner` stage unless explicitly
+marked **unverified**.
 
 ## Image
 
@@ -15,6 +17,7 @@ stage unless explicitly marked **unverified**.
 | Architecture | `linux/amd64` only. Tasks declare no `runtime_platform`, so they run x86_64; an arm64 image fails with "no matching manifest" |
 | Build | `.github/workflows/docker-main.yml`, stage `runner` |
 | Pull auth | GitHub service account credential from Secrets Manager. The package is private by default, so that account needs `read:packages` |
+| Agent runtime image | `:opencode` / `:opencode-sha-<short>`, built by the same workflow from `docker/opencode/Dockerfile`. Only needed when the agent plane is enabled — see [Agent plane](#agent-plane--the-opencode-and-mcp-sidecars) |
 
 ## Paths inside the image
 
@@ -29,13 +32,14 @@ stage unless explicitly marked **unverified**.
 The reusable workflow's default of `/docker/scripts/init-or-migrate.sh` is **wrong** for
 this image; `/app/docker/scripts/init-or-migrate.sh` is correct.
 
-## Three run modes, one image
+## Four run modes, one image
 
 | Mode | Command | Notes |
 |---|---|---|
 | App | default `CMD` (`yarn start` → `yarn mercato server start`) | Listens on `PORT` (3000), binds `HOSTNAME=0.0.0.0` — both baked into the image |
 | Worker | `["mercato", "queue", "worker", "--all"]` | Verified in the built image: 18 queues discovered, CLI starts without a database. The `workflows:startWorker` command in the original infra brief does not exist in this app |
 | Migrations | `["/app/docker/scripts/init-or-migrate.sh"]` | One-off task, runs before the service rolls |
+| MCP sidecar | `["sh", "/app/docker/scripts/mcp-entrypoint.sh"]` | Optional fourth mode, same image again. Serves Streamable HTTP MCP on 3001 and hosts the `isolated-vm` sandbox. See [Agent plane](#agent-plane--the-opencode-and-mcp-sidecars) |
 
 **The worker command from the infra brief is wrong for this app.** The CLI takes
 `mercato <module> <command>`, never a colon-separated form, and `workflows` is not among
@@ -225,6 +229,189 @@ Fargate's default ephemeral storage is 20 GiB and holds the image uncompressed, 
 is comfortable headroom now. Every deploy still pulls the image twice — once for the
 migration task, once for the rolling deployment — so the pull remains a real part of
 deploy time.
+
+## Agent plane — the `opencode` and `mcp` sidecars
+
+Optional, and off by default: the two-container task above runs the app with the Agent
+Orchestrator UI present but its runtime unreachable, which is what the red `OpenCode` /
+`MCP` badges in the admin header mean. Turning the plane on adds **two containers to the
+same task** and **one new image**.
+
+Enabling it is a decision, not a default. Everything below is additive — none of it
+changes the app/worker/migration containers except the three variables called out under
+"Changes to the existing containers".
+
+### Images
+
+| Container | Image | Built by |
+|---|---|---|
+| `mcp` | `ghcr.io/evojam/blueprint-2-quote:main` — **the app image**, different command | existing `build` job |
+| `opencode` | `ghcr.io/evojam/blueprint-2-quote:opencode` | `opencode` job in `.github/workflows/docker-main.yml` |
+
+The MCP sidecar is the app image with another entrypoint, so it costs no extra build and
+no extra pull — the task already has those layers.
+
+`:opencode` is mutable and moves with every merge to `main`, exactly like `:main`;
+`:opencode-sha-<short>` is the immutable pin. Both tags are built from
+`docker/opencode/Dockerfile`, which layers `AGENTS.md`, `entrypoint.sh`, `agents/` and
+`skills/` onto the published base `docker.io/openmercatocom/open-mercato-opencode:1.18.3`.
+
+That base is multi-arch (`linux/amd64` + `linux/arm64`); the CI job pins `linux/amd64` for
+the same reason the app image does. Measured on a local `linux/amd64` build: **147 MB**
+container filesystem, against the app image's 3.02 GB — the agent plane is noise against
+the 20 GiB ephemeral budget.
+
+**Why a separate image at all.** Compose runs OpenCode straight from the public base and
+bind-mounts those four things out of the working tree. Fargate has no bind mounts, so the
+base image on its own boots an OpenCode with no agents and no generated config. The
+`agents/` and `skills/` directories are `yarn generate` output that is **committed** — if
+they are stale in git, they are stale in the image, and nothing at deploy time will say so.
+
+### Topology
+
+All containers of an `awsvpc` task share one network namespace, so the sidecars talk over
+`localhost` and need no service discovery. The ports do not collide: app 3000, `mcp` 3001,
+`opencode` 4096.
+
+```
+app :3000  ──OPENCODE_URL──▶  opencode :4096
+   ▲                              │
+   │                      OPENCODE_MCP_URL
+   │                              ▼
+   └──────APP_URL───────────  mcp :3001
+              (mcp blocks on app at boot)
+```
+
+There is no service discovery to configure — no Cloud Map, no extra networking, and no
+target group for either sidecar port. The whole wiring is three environment variables.
+
+The app-side defaults are already `http://localhost:4096` and `http://localhost:3001`
+(verified in `@open-mercato/ai-assistant` `opencode-handlers.ts` / `opencode-client.ts`),
+so `OPENCODE_URL` and `MCP_URL` can be left unset on the app container. Setting them
+explicitly is still worth it as documentation.
+
+The other two directions are **not** safe to leave defaulted, because their defaults are
+compose-shaped and unresolvable on ECS:
+
+| Variable | Container | Default in code | Must be |
+|---|---|---|---|
+| `APP_URL` | `mcp` | `http://app:3000` | `http://localhost:3000` |
+| `OPENCODE_MCP_URL` | `opencode` | `http://host.docker.internal:3001/mcp` | `http://localhost:3001/mcp` |
+
+Getting these wrong fails quietly rather than loudly. `APP_URL` is the gate
+`mcp-entrypoint.sh` blocks on, so a stale default means `mcp` waits its full 1800 s for a
+host that does not exist, and `opencode` then waits its own 1800 s for a key that never
+arrives. The task looks alive for an hour and serves nothing.
+
+**Neither sidecar port goes near the ALB.** OpenCode ships no authentication of its own,
+and anyone who can reach 4096 can drive the agent runtime. Only the app container's 3000
+is a target-group member.
+
+### Boot order
+
+The chain is circular and slow, and both sidecars are built to wait it out rather than
+crash-loop:
+
+1. `app` starts and serves HTTP.
+2. `mcp` polls the app (`MCP_WAIT_FOR_APP_TIMEOUT`, default **1800 s**), provisions its own
+   API key, then listens on 3001.
+3. `opencode` polls `http://localhost:3001/health` and the key file
+   (`OPENCODE_MCP_KEY_WAIT_SECONDS`, default **1800 s**), writes `opencode.jsonc`, serves 4096.
+
+Give both a generous `startPeriod` in the ECS health check — compose uses `start_period:
+900s`. Use ECS `dependsOn` with `condition: START` for `mcp` → `app` and `opencode` → `mcp`;
+do not use `HEALTHY`, or the 30-minute waits become deploy-blocking.
+
+On timeout `opencode` starts **anyway**, unauthenticated against MCP, and logs a warning.
+It will look up and answer 401 on every tool call. Check the container log for
+`MCP API key loaded from file` before believing a green health check.
+
+### The MCP API key handoff
+
+Compose passes the key through a shared volume: `mcp` writes `/run/mcp-shared/mcp-api-key`,
+`opencode` mounts it read-only. Two ways to do this on ECS:
+
+- **Task-scoped volume** — mirrors compose. Declare one `volumes` entry, mount it at
+  `/run/mcp-shared` on both containers (read-only on `opencode`). Keeps the key off the
+  task definition.
+- **Shared secret** — set `MCP_SERVER_API_KEY` from Secrets Manager on both containers and
+  mount nothing. The entrypoint prefers the env value and skips the file wait entirely,
+  which also removes one of the two 1800 s waits.
+
+The second is the smaller moving part and the recommendation for the demo. Do not set both.
+
+If you take the volume route, mind the user: compose runs `mcp` as `user: "0"`, but the
+image's runtime user is `omuser` (uid 1001), which is what the ECS containers will be. The
+mount point has to be writable by 1001, or key provisioning fails and `opencode` waits out
+its full 1800 s before starting unauthenticated.
+
+### Environment
+
+**S** = Secrets Manager, **E** = plain value. Anything not listed is not needed by that
+container.
+
+| Variable | `mcp` | `opencode` | Value / note |
+|---|:--:|:--:|---|
+| `DATABASE_URL` | S | — | same RDS string as the app |
+| `JWT_SECRET` | S | — | must match the app |
+| `TENANT_DATA_ENCRYPTION_KEY` | S | — | tier-2 session-token decryption |
+| `REDIS_URL` | E | — | same ElastiCache as the app |
+| `CACHE_STRATEGY` | E | — | `redis` |
+| `APP_URL` | E | — | **`http://localhost:3000`, required.** Default is `http://app:3000`, a compose DNS name. Also the boot gate |
+| `NEXT_PUBLIC_APP_URL` | E | — | same; pinned so a stray value cannot hijack the base URL |
+| `AUTO_SPAWN_WORKERS` | E | — | **`false`** — the sidecar must never drain the worker's queues |
+| `AUTO_SPAWN_SCHEDULER` | E | — | **`false`**, same reason |
+| `MCP_PORT` | E | — | `3001` |
+| `MCP_WAIT_FOR_APP_TIMEOUT` | E | — | seconds; default 1800 |
+| `OM_ENABLE_ENTERPRISE_MODULES` | E | — | `true` |
+| `OM_ENABLE_ENTERPRISE_MODULES_AGENTS` | E | — | `true` |
+| `MCP_SERVER_API_KEY` | S | S | same value on both (shared-secret option) |
+| `OPENCODE_MCP_URL` | — | E | **`http://localhost:3001/mcp`, required.** Default is `host.docker.internal`, a compose-ism |
+| `OM_AI_PROVIDER` | — | E | `openai` / `anthropic` / … ; default `openai` |
+| `OM_AI_MODEL` | — | E | optional; the entrypoint picks a per-provider default |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | S | S | whichever provider is selected, on **both** |
+| `OPENCODE_PASSWORD` | — | S | optional HTTP Basic on 4096; cheap defence in depth |
+
+`OM_ENABLE_ENTERPRISE_MODULES*` are baked into the app image with defaults of `true`
+(`Dockerfile`), so the `mcp` container inherits them; the rows above are belt-and-braces
+for a task definition that overrides the environment wholesale.
+
+### Changes to the existing containers
+
+| Variable | Container | Value |
+|---|---|---|
+| `OPENCODE_URL` | app | `http://localhost:4096` (matches the built-in default) |
+| `MCP_URL` | app | `http://localhost:3001` (matches the built-in default) |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | app | already listed in the matrix; required once agents run |
+
+Nothing changes for the worker or the migration task.
+
+### Where the sandbox actually runs
+
+Worth stating because the name misleads: the `isolated-vm` sandbox that executes skill
+scripts (`run_skill_script`, no fs/net/require/process, 30 s cap) runs **in the OM process
+— the `mcp` container**, not inside OpenCode. Web egress likewise runs server-side in the
+OM process, never in the sandbox. OpenCode is the agent runtime that *calls* those MCP
+tools; its own `bash` tool is denied outright and `read`/`write`/`edit` stay off unless
+`OM_OPENCODE_FILES_ENABLED` is set.
+
+So a task that only needs the sandbox exercised needs `mcp`. `opencode` is what makes the
+file-defined agents in `docker/opencode/agents/` available to drive it.
+
+### Known limits
+
+- **Single task only.** `agentWorkspaceManager` is a process-wide singleton and its
+  concurrency semaphore (`OM_OPENCODE_POOL_SIZE`, default 1) serializes runs *within one
+  process*. Two app tasks means two independent semaphores over one shared OpenCode lease
+  model. Do not scale the service past one task with the agent plane on.
+- **The file plane is off.** Attachments-in / artifacts-out needs
+  `OM_OPENCODE_FILES_ENABLED=true` plus a workspace root shared between the app and
+  `opencode` (`OM_OPENCODE_WORKSPACE_ROOT`, `OM_OPENCODE_WORKSPACE_ROOT_CONTAINER`) — a
+  second shared volume. Left out here deliberately; agents that only read data and submit
+  outcomes do not need it.
+- **Unverified on ECS.** Everything in this section is derived from the compose
+  definitions, the two entrypoints and the module sources, plus a local `linux/amd64` build
+  of the `opencode` image. The four-container task has not been run on Fargate.
 
 ## Task definition matrix
 
