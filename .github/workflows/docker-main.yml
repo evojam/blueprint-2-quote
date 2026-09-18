@@ -15,7 +15,11 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Repository variable BUILD_RUNNER selects a larger GitHub-hosted runner once
+    # an org admin has created one (Settings -> Actions -> Runners). Until then this
+    # falls back to the standard 2-vCPU runner — a `runs-on` label that does not
+    # exist does not fail the job, it queues it forever, so the fallback is the point.
+    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read
       packages: write
@@ -52,5 +56,9 @@ jobs:
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Registry cache, not type=gha. The GitHub Actions cache is capped at
+          # 10 GB per repository, and `mode=max` on this multi-stage build spent
+          # 8m07s of a 15m54s run uploading layers that the cap would then evict.
+          # GHCR has no such cap and the runner reaches it at full bandwidth.
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
