@@ -5,7 +5,6 @@ services:
       context: .
       args:
         - CONTAINER_PORT=${CONTAINER_PORT:-3000}
-        - INSTALL_CHROMIUM=${INSTALL_CHROMIUM:-0}
         # Optional: browser-reachable ws(s):// endpoint baked in at build time.
         # Leave unset to disable realtime document collaboration (the editor
         # falls back to single-user editing). Invalid production values are
@@ -100,6 +99,7 @@ services:
       UPGRADE_ACTIONS_ENABLED: ${UPGRADE_ACTIONS_ENABLED:-true}
       SELF_SERVICE_ONBOARDING_ENABLED: ${SELF_SERVICE_ONBOARDING_ENABLED:-true}
       DEMO_MODE: ${DEMO_MODE:-true}
+      SYSTEM_EMAIL_PROVIDER: ${SYSTEM_EMAIL_PROVIDER:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       EMAIL_FROM: ${EMAIL_FROM:-}
       OM_DISABLE_VECTOR_SEARCH_AUTOINDEXING: ${OM_DISABLE_VECTOR_SEARCH_AUTOINDEXING:-false}
@@ -126,7 +126,6 @@ services:
       args:
         - CONTAINER_PORT=${CONTAINER_PORT:-3000}
         - DOCUMENTS_COLLAB_PORT=${DOCUMENTS_COLLAB_PORT:-4101}
-        - INSTALL_CHROMIUM=${INSTALL_CHROMIUM:-0}
         - NEXT_PUBLIC_DOCUMENTS_COLLAB_URL=${NEXT_PUBLIC_DOCUMENTS_COLLAB_URL:-}
         - OPEN_MERCATO_DOCKER_REGISTRY_HOST=host.docker.internal
       extra_hosts:
@@ -266,7 +265,6 @@ services:
       context: .
       args:
         - CONTAINER_PORT=${CONTAINER_PORT:-3000}
-        - INSTALL_CHROMIUM=${INSTALL_CHROMIUM:-0}
         - OPEN_MERCATO_DOCKER_REGISTRY_HOST=host.docker.internal
         - OM_ENABLE_ENTERPRISE_MODULES=${OM_ENABLE_ENTERPRISE_MODULES:-false}
         - OM_ENABLE_ENTERPRISE_MODULES_AGENTS=${OM_ENABLE_ENTERPRISE_MODULES_AGENTS:-false}

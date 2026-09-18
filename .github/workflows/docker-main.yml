@@ -1,0 +1,86 @@
+name: Build main image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # Only the newest main commit is worth an image; cancel a build it superseded.
+  group: docker-main
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  build:
+    # Repository variable BUILD_RUNNER selects a larger GitHub-hosted runner once
+    # an org admin has created one (Settings -> Actions -> Runners). Until then this
+    # falls back to the standard 2-vCPU runner — a `runs-on` label that does not
+    # exist does not fail the job, it queues it forever, so the fallback is the point.
+    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Short SHA
+        id: sha
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runner
+          push: true
+          # ECS Fargate tasks here declare no runtime_platform, so they run x86_64.
+          # A default build on an Apple-silicon runner/laptop produces arm64 and ECS
+          # rejects it with "no matching manifest".
+          platforms: linux/amd64
+          # `:main` is mutable on purpose — deploy does force-new-deployment.
+          # `:sha-<short>` is the immutable escape hatch to pin a known-good build.
+          tags: |
+            ${{ env.IMAGE }}:main
+            ${{ env.IMAGE }}:sha-${{ steps.sha.outputs.short }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          # Registry cache, not type=gha. The GitHub Actions cache is capped at
+          # 10 GB per repository, and `mode=max` on this multi-stage build spent
+          # 8m07s of a 15m54s run uploading layers that the cap would then evict.
+          # GHCR has no such cap and the runner reaches it at full bandwidth.
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
+
+  deploy:
+    # Every green image on main is a deploy. The infra repo's workflow pulls the
+    # mutable `:main` tag and does force-new-deployment, so the trigger is all that
+    # is needed here — no tag or digest has to be passed along.
+    #
+    # `needs: build` means this only runs when the image actually published, and the
+    # ref guard keeps feature-branch dispatches from deploying. The job is included in
+    # the `docker-main` concurrency group above, so a build superseded by a newer
+    # commit cancels its deploy too rather than racing it.
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger the demo deploy in evojam/aws
+        env:
+          # Fine-grained PAT (or GitHub App token) with Actions: read and write on
+          # evojam/aws. The default GITHUB_TOKEN is scoped to THIS repository and
+          # cannot dispatch a workflow in another one — it fails with 404, which
+          # reads like a missing workflow rather than a missing permission.
+          GH_TOKEN: ${{ secrets.AWS_DEPLOY_DISPATCH_TOKEN }}
+        run: gh workflow run blueprint-2-quote.yml --repo evojam/aws --ref main
