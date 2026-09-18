@@ -7,6 +7,7 @@ export type ModuleEntry = { id: string; from?: '@open-mercato/core' | '@app' | s
 
 export const enabledModules: ModuleEntry[] = [
   { id: 'auth', from: '@open-mercato/core' },
+  { id: 'api_keys', from: '@open-mercato/core' },
   { id: 'directory', from: '@open-mercato/core' },
   { id: 'configs', from: '@open-mercato/core' },
   { id: 'entities', from: '@open-mercato/core' },

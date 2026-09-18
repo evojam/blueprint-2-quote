@@ -12,6 +12,8 @@ services:
         # ignored at runtime instead of failing the image build.
         - NEXT_PUBLIC_DOCUMENTS_COLLAB_URL=${NEXT_PUBLIC_DOCUMENTS_COLLAB_URL:-}
         - OPEN_MERCATO_DOCKER_REGISTRY_HOST=host.docker.internal
+        - OM_ENABLE_ENTERPRISE_MODULES=${OM_ENABLE_ENTERPRISE_MODULES:-false}
+        - OM_ENABLE_ENTERPRISE_MODULES_AGENTS=${OM_ENABLE_ENTERPRISE_MODULES_AGENTS:-false}
       extra_hosts:
         - "host.docker.internal:host-gateway"
     user: "0"
@@ -78,8 +80,12 @@ services:
       OM_MULTI_INSTANCE: ${OM_MULTI_INSTANCE:-false}
       OM_INSTANCE_COUNT: ${OM_INSTANCE_COUNT:-1}
       ENABLE_CRUD_API_CACHE: ${ENABLE_CRUD_API_CACHE:-true}
+      OM_ENABLE_ENTERPRISE_MODULES: ${OM_ENABLE_ENTERPRISE_MODULES:-false}
+      OM_ENABLE_ENTERPRISE_MODULES_AGENTS: ${OM_ENABLE_ENTERPRISE_MODULES_AGENTS:-false}
       OM_AI_PROVIDER: ${OM_AI_PROVIDER:-openai}
       OM_AI_MODEL: ${OM_AI_MODEL:-gpt-5-mini}
+      OPENCODE_URL: ${OPENCODE_URL:-http://opencode:4096}
+      OPENCODE_PASSWORD: ${OPENCODE_PASSWORD:-}
       OPENCODE_PROVIDER: ${OPENCODE_PROVIDER:-}
       OPENCODE_MODEL: ${OPENCODE_MODEL:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -210,7 +216,7 @@ services:
       OM_AI_MODEL: ${OM_AI_MODEL:-gpt-5-mini}
       OPENCODE_PROVIDER: ${OPENCODE_PROVIDER:-}
       OPENCODE_MODEL: ${OPENCODE_MODEL:-}
-      OPENCODE_PASSWORD: ${OPENCODE_PASSWORD:-}
+      OPENCODE_SERVER_PASSWORD: ${OPENCODE_PASSWORD:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY:-}
@@ -240,7 +246,7 @@ services:
     # Visibility only (compose ps / smoke tests): the entrypoint owns the
     # wait-for-MCP-and-key sequencing.
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "--max-time", "5", "http://127.0.0.1:4096/global/health"]
+      test: ["CMD-SHELL", "curl -fsS --max-time 5 --user \"opencode:$${OPENCODE_SERVER_PASSWORD:-}\" http://127.0.0.1:4096/global/health"]
       interval: 30s
       timeout: 6s
       retries: 20
@@ -262,6 +268,8 @@ services:
         - CONTAINER_PORT=${CONTAINER_PORT:-3000}
         - INSTALL_CHROMIUM=${INSTALL_CHROMIUM:-0}
         - OPEN_MERCATO_DOCKER_REGISTRY_HOST=host.docker.internal
+        - OM_ENABLE_ENTERPRISE_MODULES=${OM_ENABLE_ENTERPRISE_MODULES:-false}
+        - OM_ENABLE_ENTERPRISE_MODULES_AGENTS=${OM_ENABLE_ENTERPRISE_MODULES_AGENTS:-false}
       extra_hosts:
         - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -304,6 +312,8 @@ services:
       TENANT_DATA_ENCRYPTION_FALLBACK_KEY: ${TENANT_DATA_ENCRYPTION_FALLBACK_KEY:-dev-tenant-encryption-fallback-key-32chars}
       TENANT_DATA_ENCRYPTION_KEY: ${TENANT_DATA_ENCRYPTION_KEY:-}
       OM_INIT_SUPERADMIN_EMAIL: ${OM_INIT_SUPERADMIN_EMAIL:-}
+      OM_ENABLE_ENTERPRISE_MODULES: ${OM_ENABLE_ENTERPRISE_MODULES:-false}
+      OM_ENABLE_ENTERPRISE_MODULES_AGENTS: ${OM_ENABLE_ENTERPRISE_MODULES_AGENTS:-false}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY:-}

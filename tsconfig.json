@@ -35,6 +35,10 @@
         "./.mercato/*"
       ]
     },
+    "rootDirs": [
+      "./.mercato",
+      "./node_modules/@open-mercato/enterprise/src/modules/agent_orchestrator"
+    ],
     "typeRoots": [
       "./types",
       "./node_modules/@types"
@@ -50,9 +54,13 @@
     ".mercato/**/*.ts",
     ".next/dev/types/**/*.ts",
     ".mercato/next/types/**/*.ts",
-    ".mercato/next/dev/types/**/*.ts"
+    ".mercato/next/dev/types/**/*.ts",
+    ".mercato/next/dev/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "src/modules/**/agents/**/scripts/**",
+    "src/modules/**/agents/**/tools/**",
+    ".mercato/generated/file-agents.generated.ts"
   ]
 }
