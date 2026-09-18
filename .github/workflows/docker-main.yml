@@ -62,3 +62,25 @@ jobs:
           # GHCR has no such cap and the runner reaches it at full bandwidth.
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
+
+  deploy:
+    # Every green image on main is a deploy. The infra repo's workflow pulls the
+    # mutable `:main` tag and does force-new-deployment, so the trigger is all that
+    # is needed here — no tag or digest has to be passed along.
+    #
+    # `needs: build` means this only runs when the image actually published, and the
+    # ref guard keeps feature-branch dispatches from deploying. The job is included in
+    # the `docker-main` concurrency group above, so a build superseded by a newer
+    # commit cancels its deploy too rather than racing it.
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger the demo deploy in evojam/aws
+        env:
+          # Fine-grained PAT (or GitHub App token) with Actions: read and write on
+          # evojam/aws. The default GITHUB_TOKEN is scoped to THIS repository and
+          # cannot dispatch a workflow in another one — it fails with 404, which
+          # reads like a missing workflow rather than a missing permission.
+          GH_TOKEN: ${{ secrets.AWS_DEPLOY_DISPATCH_TOKEN }}
+        run: gh workflow run blueprint-2-quote.yml --repo evojam/aws --ref main
