@@ -3,9 +3,7 @@ import { makeCrudRoute } from '@open-mercato/shared/lib/crud/factory'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { DealDocumentLink } from '../../data/entities'
 import { documentLinkCreateSchema } from '../../commands/document-links'
-import { documentLinksRouteAccess } from '../../lib/route-access'
-
-const ENTITY_ID = 'deal_links:document_link' as const
+import { documentLinksRouteAccess, DOCUMENT_LINK_ENTITY_ID } from '../../lib/route-access'
 
 const querySchema = z.object({
   dealId: z.string().uuid().optional(),
@@ -47,7 +45,7 @@ export const { metadata, GET, POST } = makeCrudRoute({
   },
   list: {
     schema: querySchema,
-    entityId: ENTITY_ID,
+    entityId: DOCUMENT_LINK_ENTITY_ID,
     fields: () => ['id', 'deal_id', 'document_id', 'document_kind', 'created_at'],
     sortFieldMap: { created_at: 'created_at' },
     buildFilters: async (q: Query) => {

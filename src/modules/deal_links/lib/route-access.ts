@@ -13,3 +13,15 @@ export const documentLinksRouteAccess = {
   GET: { requireAuth: true, requireFeatures: ['customers.deals.view'] },
   POST: { requireAuth: true, requireFeatures: ['customers.deals.manage'] },
 }
+
+/**
+ * The datamodel entity id the generator registers for `DealDocumentLink`
+ * (`.mercato/generated/entities.ids.generated.ts` -> `E.deal_links.deal_document_link`).
+ * `makeCrudRoute`'s `list.entityId` takes the QueryEngine branch whenever both
+ * `entityId` and `fields` are set, and resolves the table by PascalCasing this
+ * id's second segment and looking up the registered class. Getting it wrong
+ * silently falls through to a table-name guess that does not exist
+ * (`document_links` instead of the real `deal_document_links`), so it lives
+ * here, under test, rather than as an inline literal in `route.ts`.
+ */
+export const DOCUMENT_LINK_ENTITY_ID = 'deal_links:deal_document_link'
