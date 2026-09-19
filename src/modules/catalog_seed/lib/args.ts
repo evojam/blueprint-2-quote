@@ -1,12 +1,11 @@
 export const USAGE =
-  'Usage: mercato catalog_seed seed-renovation-catalog --org <organizationId> [--dry-run] [--backfill-vat]'
+  'Usage: mercato catalog_seed seed-renovation-catalog --org <organizationId> [--dry-run]'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export type SeedArgs = {
   organizationId: string
   dryRun: boolean
-  backfillVat: boolean
 }
 
 export type OrganizationRecord = {
@@ -24,17 +23,12 @@ export type OrganizationScope = {
 export function parseSeedArgs(argv: string[]): SeedArgs {
   let organizationId: string | null = null
   let dryRun = false
-  let backfillVat = false
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]
     if (!arg) continue
     if (arg === '--dry-run' || arg === '--dryRun') {
       dryRun = true
-      continue
-    }
-    if (arg === '--backfill-vat' || arg === '--backfillVat') {
-      backfillVat = true
       continue
     }
     const [flag, inlineValue] = arg.split('=')
@@ -57,7 +51,7 @@ export function parseSeedArgs(argv: string[]): SeedArgs {
     throw new Error(`--org must be a UUID, got "${organizationId}". ${USAGE}`)
   }
 
-  return { organizationId, dryRun, backfillVat }
+  return { organizationId, dryRun }
 }
 
 export function resolveOrganizationScope(
