@@ -623,7 +623,7 @@ async function finalizePdf(
         String(pageNumber),
         '-singlefile',
         '-r',
-        '150',
+        '300',
         '-png',
         inputPath,
         outputPrefix,
