@@ -38,5 +38,7 @@ module.exports = {
     ],
   },
   transformIgnorePatterns: ['/node_modules/(?!(@open-mercato|@mikro-orm|@tanstack/react-table|@tanstack/table-core|@tanstack/react-store|@tanstack/store)/)'],
-  testPathIgnorePatterns: ['/node_modules/', '/.next/', '/.mercato/', '/.ai/qa/'],
+  // `__tests__/fixtures/` holds shared setup data, not suites. Without this Jest picks
+  // each fixture module up as a test file and fails it for containing no test.
+  testPathIgnorePatterns: ['/node_modules/', '/.next/', '/.mercato/', '/.ai/qa/', '/__tests__/fixtures/'],
 }
