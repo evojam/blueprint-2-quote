@@ -9,6 +9,7 @@ import {
 } from '@open-mercato/enterprise/modules/agent_orchestrator/lib/sdk/defineAgent'
 import {
   CATALOG_MATCHER_AGENT_ID,
+  catalogMatcherGroupedResultSchema,
   catalogMatcherResultSchema,
 } from '../ai-agents'
 import '../ai-agents'
@@ -29,6 +30,23 @@ const envelope = {
   },
 }
 
+const groupedEnvelope = {
+  kind: 'research' as const,
+  data: {
+    contractVersion: 2 as const,
+    needs: [
+      {
+        needIndex: 0,
+        sourceExcerpt: 'Montaż instalacji elektrycznej.',
+        queryTerms: ['montaż', 'instalacja', 'elektryczna'],
+        matches: [match],
+        unmatchedTerms: [],
+      },
+    ],
+    warnings: [],
+  },
+}
+
 describe('property_documents.catalog_matcher', () => {
   it('registers one bounded native read-only matcher', async () => {
     await ensureAgentsLoaded()
@@ -42,8 +60,10 @@ describe('property_documents.catalog_matcher', () => {
       agentType: 'researcher',
       loop: { maxSteps: 4 },
       sampleInput: {
+        mode: 'grouped',
         text: 'Wykonanie projektu instalacji elektrycznej dla lokalu 120 m²',
-        limit: 5,
+        maxNeeds: 40,
+        limitPerNeed: 5,
       },
     })
     expect(entry?.tools).toEqual([
@@ -89,6 +109,70 @@ describe('property_documents.catalog_matcher', () => {
       },
     ]) {
       expect(catalogMatcherResultSchema.safeParse(invalid).success).toBe(false)
+    }
+  })
+
+  it('accepts grouped-v2 results and rejects malformed groups', () => {
+    expect(catalogMatcherGroupedResultSchema.safeParse(groupedEnvelope).success).toBe(true)
+    expect(catalogMatcherResultSchema.safeParse(envelope).success).toBe(true)
+    expect(catalogMatcherResultSchema.safeParse(groupedEnvelope).success).toBe(true)
+
+    const secondMatch = {
+      ...match,
+      catalogProductId: '22222222-2222-4222-8222-222222222222',
+      score: 0.8,
+    }
+    const secondNeed = {
+      needIndex: 0,
+      sourceExcerpt: 'Montaż instalacji wodnej.',
+    }
+
+    for (const invalid of [
+      { ...groupedEnvelope, data: { ...groupedEnvelope.data, contractVersion: 1 } },
+      {
+        ...groupedEnvelope,
+        data: { ...groupedEnvelope.data, needs: [groupedEnvelope.data.needs[0], secondNeed] },
+      },
+      {
+        ...groupedEnvelope,
+        data: {
+          ...groupedEnvelope.data,
+          needs: [{ ...groupedEnvelope.data.needs[0]!, sourceExcerpt: 'a'.repeat(501) }],
+        },
+      },
+      {
+        ...groupedEnvelope,
+        data: {
+          ...groupedEnvelope.data,
+          needs: [{ ...groupedEnvelope.data.needs[0]!, queryTerms: ['a', 'b', 'c', 'd', 'e'] }],
+        },
+      },
+      {
+        ...groupedEnvelope,
+        data: {
+          ...groupedEnvelope.data,
+          needs: [{ ...groupedEnvelope.data.needs[0]!, matches: [match, { ...match, score: 0.8 }] }],
+        },
+      },
+      {
+        ...groupedEnvelope,
+        data: {
+          ...groupedEnvelope.data,
+          needs: [{ ...groupedEnvelope.data.needs[0]!, matches: [secondMatch, { ...match, score: 0.9 }] }],
+        },
+      },
+      {
+        ...groupedEnvelope,
+        data: {
+          ...groupedEnvelope.data,
+          needs: Array.from({ length: 41 }, (_, needIndex) => ({
+            ...groupedEnvelope.data.needs[0]!,
+            needIndex,
+          })),
+        },
+      },
+    ]) {
+      expect(catalogMatcherGroupedResultSchema.safeParse(invalid).success).toBe(false)
     }
   })
 })
