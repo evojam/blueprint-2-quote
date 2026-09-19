@@ -40,61 +40,36 @@ If yes, the edit is about to be discarded — that is a decision for them, not f
 
 ## Reconciling a deployed environment
 
-Everything below is read-only until the last command.
+`yarn remote-db` does the plumbing: it finds the environment's bastion by tag and its
+database by name, opens an SSM port-forwarding tunnel, reads the secrets straight into
+the child process's environment, and tears the tunnel down afterwards — including on
+Ctrl-C and on a failure part-way through. Nothing is written to disk and nothing lands
+on a command line.
 
-1. **Find the pieces.** Names follow `<env>-…`; `blueprint-2-quote-demo` is the demo.
+```
+yarn remote-db --env <environment> -- yarn mercato rfq_intake seed-process --force
+```
 
-   ```
-   aws ec2 describe-instances --filters "Name=tag:Name,Values=*bastion*" \
-     --query 'Reservations[].Instances[].{id:InstanceId,name:Tags[?Key==`Name`]|[0].Value}'
-   aws rds describe-db-instances --query 'DBInstances[].{id:DBInstanceIdentifier,ep:Endpoint.Address}'
-   ```
+Drop `--force` for a tenant that has no row yet; the command creates it. With no
+`--tenant`/`--org` it targets every organization in that database, which is what you
+want on a single-tenant environment.
 
-2. **Open the tunnel** (SSM port forwarding through the bastion — no SSH key needed).
-   Run it in the background; it holds the port until killed.
+Verify against the database rather than the log line:
 
-   ```
-   aws ssm start-session --target <bastion-instance-id> \
-     --document-name AWS-StartPortForwardingSessionToRemoteHost \
-     --parameters '{"host":["<rds-endpoint>"],"portNumber":["5432"],"localPortNumber":["15432"]}'
-   ```
+```
+yarn remote-db --env <environment> -- sh -c \
+  'psql "$DATABASE_URL" -c "select name, workflow_id, enabled, triggers from process_definitions;"'
 
-3. **Run the reconcile.** Read the secrets into the environment — never into a file.
-   `DB_SSL=true` with `DB_SSL_REJECT_UNAUTHORIZED=false` is required: RDS refuses an
-   unencrypted connection, and through the tunnel the certificate names the RDS host
-   while the client sees `127.0.0.1`.
+# The command is spawned directly, not through a shell, so `$DATABASE_URL` only
+# expands if you ask for a shell yourself — hence the `sh -c` and the single quotes.
+```
 
-   ```
-   RAW_DB=$(aws secretsmanager get-secret-value --secret-id <env>-postgres \
-     --query SecretString --output text \
-     | python3 -c 'import sys,json; print(json.load(sys.stdin)["database_url"])')
-   export DATABASE_URL=$(printf '%s' "$RAW_DB" | sed -E 's#@[^/]+/#@127.0.0.1:15432/#')
-   export DB_SSL=true DB_SSL_REJECT_UNAUTHORIZED=false
-   export TENANT_DATA_ENCRYPTION_KEY=$(aws secretsmanager get-secret-value \
-     --secret-id <env>-tenant-data-encryption-key --query SecretString --output text)
-   export TENANT_DATA_ENCRYPTION_FALLBACK_KEY=$(aws secretsmanager get-secret-value \
-     --secret-id <env>-tenant-data-encryption-fallback-key --query SecretString --output text)
-   export LOOKUP_HASH_PEPPER=$(aws secretsmanager get-secret-value \
-     --secret-id <env>-lookup-hash-pepper --query SecretString --output text)
+`workflow_id` must be `rfq_intake.analysis` and the remaining fields must match
+`codeOwnedFields()`.
 
-   yarn mercato rfq_intake seed-process --tenant <tenantId> --org <orgId> --force
-   ```
-
-   Get the ids from `select t.id, o.id from organizations o join tenants t on t.id = o.tenant_id;`.
-
-   For a tenant that has no row yet, drop `--force` — the command creates it.
-
-4. **Verify against the database, not the log line.**
-
-   ```
-   psql "$DATABASE_URL?sslmode=require" \
-     -c "select name, workflow_id, enabled, triggers from process_definitions;"
-   ```
-
-   `workflow_id` must be `rfq_intake.analysis`, and the other fields must match
-   `codeOwnedFields()`.
-
-5. **Close the tunnel** — kill the `start-session` process.
+If discovery fails because an environment departs from the naming convention, pass
+`--bastion <instance-id>` or `--db <endpoint>`. `--print-env` lists the variables the
+script would inject, by name, without running anything or printing a value.
 
 ## Traps
 
@@ -103,6 +78,9 @@ Everything below is read-only until the last command.
   **every** organization. Write `--module rfq_intake`, or use the per-module CLI above.
 - **The local checkout must match what is deployed.** The CLI runs the code in your
   working tree against the remote database. Check out the deployed commit first.
+- **An expired AWS session looks like a missing bastion.** `remote-db` reports the
+  CLI's own stderr; `The provided authorization grant is invalid, expired, revoked, or
+  malformed` means `aws sso login`, not a broken environment.
 - **`Query index entity type is not registered: agent_orchestrator:process_definition`**
   in `indexer_error_logs` is expected and harmless here — the orchestrator module never
   registers this entity type with `query_index`, and the list page falls back to the
@@ -110,3 +88,5 @@ Everything below is read-only until the last command.
 - **A `workflow_definitions` row carrying the same `workflowId` shadows the code
   definition.** If a graph change does not show up, check that table before debugging
   the registry.
+
+For getting the chain running on your own machine instead, see [[rfq-local-run]].
