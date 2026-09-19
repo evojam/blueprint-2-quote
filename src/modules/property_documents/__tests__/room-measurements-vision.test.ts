@@ -271,13 +271,16 @@ describe('room measurements vision service', () => {
     expect(result.drawing).toMatchObject(IMAGE)
     expect(mockGenerateObject).toHaveBeenCalledTimes(1)
     const [call] = generationCalls()
-    expect(call.output).toBeUndefined()
-    expect(call.schema).toBe(roomMeasurementCandidateSchema)
+    expect(call.output).toBe('no-schema')
+    expect(call.schema).toBeUndefined()
     expect(call.messages[0].content).toEqual(
       expect.arrayContaining([{ type: 'image', image: DATA_URL }]),
     )
     expect(call.messages[0].content.map((part) => part.text ?? '').join('\n')).toContain(
       '1200 × 800 pixels',
+    )
+    expect(call.messages[0].content.map((part) => part.text ?? '').join('\n')).toContain(
+      '"sceneKind"',
     )
   })
 
@@ -306,8 +309,8 @@ describe('room measurements vision service', () => {
     expect(mockGenerateObject).toHaveBeenCalledTimes(2)
     const [first, second] = generationCalls()
     for (const call of [first, second]) {
-      expect(call.output).toBeUndefined()
-      expect(call.schema).toBe(roomMeasurementCandidateSchema)
+      expect(call.output).toBe('no-schema')
+      expect(call.schema).toBeUndefined()
       expect(call.messages[0].content).toEqual(
         expect.arrayContaining([{ type: 'image', image: DATA_URL }]),
       )

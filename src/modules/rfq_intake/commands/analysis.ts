@@ -432,65 +432,74 @@ const measureRoomsCommand: CommandHandler<MeasureRoomsInput, RoomMeasurementFano
     if (!userId) failIntake('trusted user is unavailable')
     const em = (ctx.container.resolve('em') as EntityManager).fork()
     const { runId, pages } = await loadPdfIntakePages(em, ctx, input)
+    // HACK(hackathon): POC deliberately measures only the final rendered PDF page so
+    // it can be started manually without fan-out. Multi-page floor plans are ignored.
+    const page = pages.at(-1)
+    if (!page) failIntake('rendered page list is empty')
     const agentRuntime = ctx.container.resolve('agentRuntime') as AgentRuntime
     const failed: Array<{ fileName: string; reason: string }> = []
     const measurements: RoomMeasurementFanoutResult['measurements'] = []
-    for (const page of pages) {
-      try {
-        const { attachmentId } = await runCommand<
-          {
-            tenantId: string
-            organizationId: string
-            artifactId: string
-            entityId: string
-            recordId: string
-            fileName: string
+    try {
+      const { attachmentId } = await runCommand<
+        {
+          tenantId: string
+          organizationId: string
+          artifactId: string
+          entityId: string
+          recordId: string
+          fileName: string
+        },
+        { attachmentId: string }
+      >(ctx, 'agent_orchestrator.artifact.promote', {
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        artifactId: page.id,
+        entityId: 'customers:customer_deal',
+        recordId: input.dealId,
+        fileName: page.fileName,
+      })
+      const result = await agentRuntime.run(
+        ROOM_MEASUREMENTS_AGENT_ID,
+        {
+          __files: {
+            attachments: [{ attachmentId, as: page.fileName }],
           },
-          { attachmentId: string }
-        >(ctx, 'agent_orchestrator.artifact.promote', {
+        },
+        {
           tenantId: scope.tenantId,
           organizationId: scope.organizationId,
-          artifactId: page.id,
-          entityId: 'customers:customer_deal',
-          recordId: input.dealId,
-          fileName: page.fileName,
-        })
-        const result = await agentRuntime.run(
-          ROOM_MEASUREMENTS_AGENT_ID,
-          {
-            __files: {
-              attachments: [{ attachmentId, as: page.fileName }],
-            },
-          },
-          {
-            tenantId: scope.tenantId,
-            organizationId: scope.organizationId,
-            userId,
-            workflowInstanceId: input.workflowInstanceId,
-            stepId: input.stepId,
-            invocationId: `room-measurement:${page.id}`,
-          },
+          userId,
+          workflowInstanceId: input.workflowInstanceId,
+          stepId: input.stepId,
+          invocationId: `room-measurement:${page.id}`,
+        },
+      )
+      const parsedResult = roomMeasurementAgentResultSchema.safeParse(result)
+      if (!parsedResult.success) throw new Error('[internal] invalid room measurement result')
+      if (parsedResult.data.data.analysisStatus === 'unreadable') {
+        throw new Error(
+          parsedResult.data.data.warnings[0] ??
+            parsedResult.data.data.drawing.warnings[0] ??
+            'room measurement agent could not read the rendered page',
         )
-        const parsedResult = roomMeasurementAgentResultSchema.safeParse(result)
-        if (!parsedResult.success) throw new Error('[internal] invalid room measurement result')
-        if (
-          parsedResult.data.data.drawing.imageWidthPx !== page.imageWidthPx ||
-          parsedResult.data.data.drawing.imageHeightPx !== page.imageHeightPx
-        ) {
-          throw new Error('[internal] room measurement dimensions mismatch')
-        }
-        measurements.push({ fileName: page.fileName, data: parsedResult.data.data })
-      } catch (error) {
-        failed.push({
-          fileName: page.fileName,
-          reason: error instanceof Error ? error.message : 'room measurement run failed',
-        })
       }
+      if (
+        parsedResult.data.data.drawing.imageWidthPx !== page.imageWidthPx ||
+        parsedResult.data.data.drawing.imageHeightPx !== page.imageHeightPx
+      ) {
+        throw new Error('[internal] room measurement dimensions mismatch')
+      }
+      measurements.push({ fileName: page.fileName, data: parsedResult.data.data })
+    } catch (error) {
+      failed.push({
+        fileName: page.fileName,
+        reason: error instanceof Error ? error.message : 'room measurement run failed',
+      })
     }
     return {
       intakeRunId: runId,
-      totalPages: pages.length,
-      succeeded: pages.length - failed.length,
+      totalPages: 1,
+      succeeded: 1 - failed.length,
       failed,
       measurements,
     }
