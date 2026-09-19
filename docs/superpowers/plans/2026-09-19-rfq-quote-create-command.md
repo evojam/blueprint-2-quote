@@ -102,6 +102,26 @@ describe('rfq_intake.quote.create input contract', () => {
     expect(parsed).not.toHaveProperty('organizationId')
   })
 
+  it('requires roomIds for an area basis, which a flat optional field could not enforce', async () => {
+    const { quoteCreateInputSchema } = await import('../commands/quote-create')
+    expect(() =>
+      quoteCreateInputSchema.parse({
+        dealId, roomMeasurementsRunId: runId,
+        items: [{ catalogProductId: productId, basis: 'net_wall_area' }],
+      }),
+    ).toThrow()
+  })
+
+  it('rejects a count supplied alongside an area basis rather than ignoring it', async () => {
+    const { quoteCreateInputSchema } = await import('../commands/quote-create')
+    const parsed = quoteCreateInputSchema.parse({
+      dealId, roomMeasurementsRunId: runId,
+      items: [{ catalogProductId: productId, basis: 'floor_area', roomIds: ['room-1'], count: 4 }],
+    })
+    // The union member has no `count`, so the stray key is stripped, never acted on.
+    expect(parsed.items[0]).not.toHaveProperty('count')
+  })
+
   it('fails closed when the runtime context carries no tenant', async () => {
     const ctx = { auth: {}, container: { resolve: () => ({}) } } as never
     await expect(createQuoteCommand.execute(validInput, ctx)).rejects.toThrow(/Tenant/)
@@ -138,28 +158,40 @@ import { z } from 'zod'
  * is authored by a language model and may carry `tenantId`/`organizationId`; stripping
  * them here is what makes it impossible to write into someone else's scope by asking.
  */
+/** Fields every item carries, whatever its basis. */
+const itemCommon = {
+  catalogProductId: z.string().uuid(),
+  variantId: z.string().uuid().optional(),
+  note: z.string().max(1000).optional(),
+}
+
+const roomIds = z.array(z.string().min(1).max(200)).min(1).max(200)
+
+/**
+ * Discriminated on `basis`, which is the single word the agent was already choosing —
+ * so the union costs the model no extra decision while making `roomIds` REQUIRED where
+ * it means something instead of an optional that silently does nothing.
+ *
+ * This is also the extension point. A future work type (`floor_perimeter`,
+ * `opening_perimeter`, `wall_run_length`, `same_as`) arrives as one more member with
+ * its own fields, rather than as another `field?` that most bases would ignore.
+ */
+const quoteItemSchema = z.discriminatedUnion('basis', [
+  z.object({ ...itemCommon, basis: z.literal('floor_area'), roomIds }),
+  z.object({ ...itemCommon, basis: z.literal('gross_wall_area'), roomIds }),
+  z.object({ ...itemCommon, basis: z.literal('net_wall_area'), roomIds }),
+  z.object({ ...itemCommon, basis: z.literal('count'), count: z.number().int().positive().max(10_000) }),
+  z.object({
+    ...itemCommon,
+    basis: z.literal('given'),
+    given: z.object({ value: z.number().positive(), unit: z.enum(['m2', 'mb', 'szt', 'kpl']) }),
+  }),
+])
+
 export const quoteCreateInputSchema = z.object({
   dealId: z.string().uuid(),
   roomMeasurementsRunId: z.string().uuid(),
-  items: z
-    .array(
-      z.object({
-        catalogProductId: z.string().uuid(),
-        variantId: z.string().uuid().optional(),
-        basis: z.enum(['floor_area', 'gross_wall_area', 'net_wall_area', 'count', 'given']),
-        roomIds: z.array(z.string().min(1).max(200)).max(200).optional(),
-        count: z.number().int().positive().max(10_000).optional(),
-        given: z
-          .object({
-            value: z.number().positive(),
-            unit: z.enum(['m2', 'mb', 'szt', 'kpl']),
-          })
-          .optional(),
-        note: z.string().max(1000).optional(),
-      }),
-    )
-    .min(1)
-    .max(100),
+  items: z.array(quoteItemSchema).min(1).max(100),
 })
 
 export type QuoteCreateInput = z.infer<typeof quoteCreateInputSchema>
@@ -981,7 +1013,30 @@ Expected: FAIL — cannot find module `../lib/basisResolver`.
 
 - [ ] **Step 3: Implement**
 
-Write `basisResolver.ts` so that:
+Structure the module around a table, not a switch, so a reserved basis lands as one row:
+
+```ts
+type BasisSpec = {
+  acceptedUnits: ReadonlyArray<'m2' | 'mb' | 'szt' | 'kpl'>
+  resolve: (ctx: BasisContext) => QuantityOk | QuantityFailure
+}
+
+/**
+ * Reserved but NOT implemented, named here so the work that adds them does not invent
+ * a parallel vocabulary: `floor_perimeter` (+ excludeDoorways), `opening_perimeter`
+ * (+ openingKind), `wall_run_length`, `same_as` (+ refItemIndex). Today there is no
+ * linear basis at all, so the catalogue's `mb` services are reachable only via `given`.
+ */
+export const BASIS_SPECS: Record<Basis, BasisSpec> = {
+  floor_area: { acceptedUnits: ['m2'], resolve: resolveFloorArea },
+  gross_wall_area: { acceptedUnits: ['m2'], resolve: resolveGrossWallArea },
+  net_wall_area: { acceptedUnits: ['m2'], resolve: resolveNetWallArea },
+  count: { acceptedUnits: ['szt', 'kpl'], resolve: resolveCount },
+  given: { acceptedUnits: ['m2', 'mb', 'szt', 'kpl'], resolve: resolveGiven },
+}
+```
+
+`acceptedUnitsFor` reads the table; `resolveQuantity` dispatches through it. Then implement each resolver so that:
 
 1. `analysisStatus` outside `{complete, partial}` returns `{ ok: false, code: 'not_floor_plan' }` (use `'unreadable'` when that is the status).
 2. Each `roomIds` entry must match a `rooms[].id`; a miss returns `room_not_found`.

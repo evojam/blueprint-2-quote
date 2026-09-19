@@ -151,25 +151,31 @@ No new entities and no migration. The quote is a Sales record and correlation tr
 
 ### Input — optimised for the agent
 
-Flat, one enum, no nesting, and no number the model has to compute:
+One enum, and no number the model has to compute except a bare count:
 
 ```ts
 {
   dealId: uuid,                    // untrusted; re-read in derived scope
   roomMeasurementsRunId: uuid,     // the V2 AgentRun this references; re-read in scope
-  items: [{
-    catalogProductId: uuid,
-    variantId?: uuid,              // from the list supplied in the agent's prompt
-    basis: 'floor_area' | 'gross_wall_area' | 'net_wall_area' | 'count' | 'given',
-    roomIds?: string[],            // V2 room ids; required for the three area bases
-    count?: number,                // required for basis 'count'
-    given?: { value: number, unit: 'm2' | 'mb' | 'szt' | 'kpl' },   // required for basis 'given'
-    note?: string                  // becomes the line description
-  }]
+  items: QuoteItem[]               // 1..100
 }
+
+type QuoteItem = {
+  catalogProductId: uuid
+  variantId?: uuid                 // from the list supplied in the agent's prompt
+  note?: string                    // becomes the line description
+} & (
+  | { basis: 'floor_area';      roomIds: string[] }   // V2 rooms[].id
+  | { basis: 'gross_wall_area'; roomIds: string[] }
+  | { basis: 'net_wall_area';   roomIds: string[] }
+  | { basis: 'count';           count: number }
+  | { basis: 'given';           given: { value: number; unit: 'm2' | 'mb' | 'szt' | 'kpl' } }
+)
 ```
 
-A flat object with one discriminating enum is deliberate. A nested union validates more tightly but forces the model to choose a shape before it has chosen a meaning; here it picks one word and fills the field that word implies, and the command rejects invalid combinations.
+**`basis` is the discriminant, and that costs the model nothing.** An earlier revision of this spec rejected a union — but that union was over *geometry*, and it forced the agent to choose a shape before it had chosen a meaning. This one is over *intent*: the discriminant is the single word the agent was already picking, so the decision surface is unchanged while validation becomes exact. `roomIds` is required where it is meaningful instead of being an optional that silently does nothing.
+
+The shape is also the extension point. A future work type arrives as one more union member carrying its own fields, rather than as another `field?` bolted onto a flat object that most bases would ignore.
 
 `roomIds` are V2 `rooms[].id` values. The agent's prompt lists each room as `id`, `printedName` and `location` so it can choose exactly, without name matching.
 
@@ -194,6 +200,27 @@ A mismatch drops the item. This is the core semantic check: `REN-CAR-01` (monta�
 ### Door and window counts are derived, not supplied
 
 `openings[].kind` is `door | window | opening | unknown`. Counts for door and window services — `REN-CAR-01`, `REN-CAR-02`, `REN-CAR-03` — are therefore computed from the V2 result over the referenced rooms, and a supplied `count` for those products is compared against the derived value rather than trusted. Sockets and lighting points do not appear on a plan view and remain agent-supplied.
+
+Which products derive their count is the command's knowledge, not the agent's: the union carries a plain `count`, and the command decides whether to override it. Teaching the agent about opening kinds would hand it back a judgment it does not need to make.
+
+### Reserved bases — named, not implemented
+
+The five bases above leave a gap that is **present today, not hypothetical**: there is no linear basis, so the `mb` services in the seeded catalog — `REN-FIN-11` obróbki blacharskie, `REN-FIN-12` rynny, `REN-FIN-13` kątowniki na oknach i drzwiach, `REN-CAR-05` zabudowa meblowa — are reachable only through `given`, which is the one place a model-authored number enters the command. `REN-FIN-13` in particular is directly derivable as the perimeter of the referenced openings.
+
+These names are reserved now so that the work adding them does not invent a parallel vocabulary. **None is implemented by this spec.**
+
+| Reserved basis | Quantity | Extra field it would carry |
+|---|---|---|
+| `floor_perimeter` | perimeter of `floor.outerBoundary` | `excludeDoorways: boolean` — baseboard does not cross a doorway |
+| `opening_perimeter` | `Σ openings ( 2·width + 2·height )` | `openingKind: 'door' \| 'window'` |
+| `wall_run_length` | `Σ walls[].length` | none |
+| `same_as` | the quantity already resolved for another item | `refItemIndex: number` |
+
+`same_as` is the member that pays for the union on its own. Paired services — demontaż starej podłogi with `REN-FIN-07` panele, skucie płytek with `REN-FIN-05` układanie płytek — must quote **identical** quantities, and a reference makes that structural instead of hoping the model repeats itself. It is also the only member that relates two items rather than describing one, which no flat optional field expresses cleanly.
+
+The resolver is therefore table-driven — `BASIS_SPECS: Record<Basis, { acceptedUnits, resolve }>` — so a reserved basis lands as one row plus one branch rather than as surgery on a growing switch.
+
+A second axis (`subject` × `metric`) was considered and rejected for now: more elegant, but it doubles the agent's decision surface for no present benefit. Revisit only if the basis count passes roughly eight.
 
 ### Output
 
