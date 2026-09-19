@@ -32,6 +32,7 @@
     "property-pdf:check": "node ./scripts/check-property-pdf-runtime.mjs",
     "install-skills": "node ./scripts/install-skills.mjs",
     "remote-db": "node ./scripts/remote-db.mjs",
+    "inspect-inbox-proposal": "tsx ./scripts/dev-inspect-inbox-proposal.ts",
     "framework:context": "node ./scripts/framework-context.mjs",
     "harness:validate": "node ./scripts/evaluate-agent-harness.mjs",
     "harness:fixture": "node ./scripts/prepare-agent-harness-fixture.mjs",
