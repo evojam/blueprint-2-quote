@@ -10,6 +10,7 @@ import {
   ROOM_DIMENSIONS_AGENT_ID,
 } from '@/modules/property_documents/ai-tools'
 import { CATALOG_MATCHER_AGENT_ID } from '@/modules/property_documents/ai-agents'
+import { runCommand } from '../lib/commandBus'
 
 const logger = createLogger('rfq_intake').child({ component: 'analysis-commands' })
 
@@ -150,9 +151,6 @@ const analyzePlansCommand: CommandHandler<AnalysisInput, {
     const input = analysisInputSchema.parse(rawInput)
     const em = (ctx.container.resolve('em') as EntityManager).fork()
     const agentRuntime = ctx.container.resolve('agentRuntime') as AgentRuntimeLike
-    const commandBus = ctx.container.resolve('commandBus') as {
-      execute: <TIn, TOut>(id: string, input: TIn, ctx?: unknown) => Promise<TOut>
-    }
 
     const run = await findIntakeRun(em, input)
     if (!run) {
@@ -191,16 +189,17 @@ const analyzePlansCommand: CommandHandler<AnalysisInput, {
       }
 
       try {
-        const { attachmentId } = await commandBus.execute<
-          Record<string, unknown>,
-          { attachmentId: string }
-        >('agent_orchestrator.artifact.promote', {
-          ...scopeOf(input),
-          artifactId: artifact.id,
-          entityId: DEAL_ENTITY_ID,
-          recordId: input.dealId,
-          fileName,
-        })
+        const { attachmentId } = await runCommand<Record<string, unknown>, { attachmentId: string }>(
+          ctx,
+          'agent_orchestrator.artifact.promote',
+          {
+            ...scopeOf(input),
+            artifactId: artifact.id,
+            entityId: DEAL_ENTITY_ID,
+            recordId: input.dealId,
+            fileName,
+          },
+        )
 
         const result = await agentRuntime.run(
           ROOM_DIMENSIONS_AGENT_ID,
