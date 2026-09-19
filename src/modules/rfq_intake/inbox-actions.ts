@@ -151,15 +151,39 @@ function asText(value: unknown): string | null {
 async function normalizeRfqPayload(
   payload: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  // Match on the key's letters and digits alone. Enumerating spellings does not hold:
+  // the first observed run emitted `ceiling_height_cm`, a later one `ceilingHeight_cm`,
+  // and a list that covers snake and camel still misses the mixed form. Collapsing the
+  // separators makes all three the same key and removes the guessing.
+  const byShape = new Map<string, unknown>()
+  for (const [key, value] of Object.entries(payload)) {
+    byShape.set(key.toLowerCase().replace(/[^a-z0-9]/g, ''), value)
+  }
+  const pick = (...names: string[]): unknown => {
+    for (const name of names) {
+      const value = byShape.get(name.toLowerCase().replace(/[^a-z0-9]/g, ''))
+      if (value != null) return value
+    }
+    return undefined
+  }
+
   const customer = asRecord(payload.customer) ?? {}
 
+  // `customerName` is listed first so a snake/mixed spelling of the canonical key
+  // (`customer_name`) is found before the looser aliases. `??=` is lazy, so a value that
+  // already arrived on the canonical key is never reconsidered.
   payload.customerName ??= asText(customer.name)
-    ?? asText(payload.customerFullName)
-    ?? asText(payload.contactName)
+    ?? asText(pick('customerName', 'customerFullName', 'contactName', 'name'))
     ?? undefined
-  payload.customerEmail ??= asText(customer.email) ?? asText(payload.email) ?? undefined
-  payload.customerPhone ??= asText(customer.phone) ?? asText(payload.phone) ?? undefined
-  payload.companyName ??= asText(customer.company) ?? asText(payload.company) ?? undefined
+  payload.customerEmail ??= asText(customer.email)
+    ?? asText(pick('customerEmail', 'email'))
+    ?? undefined
+  payload.customerPhone ??= asText(customer.phone)
+    ?? asText(pick('customerPhone', 'phone'))
+    ?? undefined
+  payload.companyName ??= asText(customer.company)
+    ?? asText(pick('companyName', 'company'))
+    ?? undefined
 
   // The enquiry's substance, in the model's own words. `buildDealDescription` reads
   // `notes`, so without this the costing clerk opens a case with an empty body.
@@ -169,17 +193,18 @@ async function normalizeRfqPayload(
   // against — a key would still have to be resolved to one language at write time.
   // What breaks: a non-Polish operator reads Polish labels around correct values.
   const facts: string[] = []
-  const scope = Array.isArray(payload.scope)
-    ? payload.scope.map(asText).filter((entry): entry is string => Boolean(entry))
-    : []
+  const rawScope = pick('scope')
+  const scope = Array.isArray(rawScope)
+    ? rawScope.map(asText).filter((entry): entry is string => Boolean(entry))
+    : [asText(rawScope)].filter((entry): entry is string => Boolean(entry))
   if (scope.length > 0) facts.push(`Zakres: ${scope.join(', ')}`)
-  const location = asText(payload.location)
+  const location = asText(pick('location'))
   if (location) facts.push(`Lokalizacja: ${location}`)
-  const area = asText(payload.area_m2) ?? asText(payload.areaM2)
+  const area = asText(pick('area_m2', 'areaM2', 'area'))
   if (area) facts.push(`Powierzchnia: ${area} m2`)
-  const floors = asText(payload.floors)
+  const floors = asText(pick('floors'))
   if (floors) facts.push(`Kondygnacje: ${floors}`)
-  const ceiling = asText(payload.ceiling_height_cm) ?? asText(payload.ceilingHeightCm)
+  const ceiling = asText(pick('ceiling_height_cm', 'ceilingHeight', 'ceilingHeightCm'))
   if (ceiling) facts.push(`Wysokość pomieszczeń: ${ceiling} cm`)
 
   if (facts.length > 0) {
@@ -187,13 +212,17 @@ async function normalizeRfqPayload(
     payload.notes = [existing, facts.join('\n')].filter(Boolean).join('\n\n')
   }
 
-  // Keys the schema does not know. `orderPayloadSchema` is not strict, so leaving them
-  // would be harmless — dropping them keeps the stored payload readable instead.
-  for (const key of [
-    'customer', 'scope', 'location', 'area_m2', 'areaM2', 'floors',
-    'ceiling_height_cm', 'ceilingHeightCm', 'email', 'phone', 'company',
-  ]) {
-    delete payload[key]
+  // Keys the schema does not know, matched by the same shape rule so a new spelling of
+  // one we already fold into `notes` does not survive as a stray. `orderPayloadSchema`
+  // is not strict, so leaving them would be harmless — dropping them keeps the stored
+  // payload readable instead.
+  const dropped = new Set(
+    ['customer', 'scope', 'location', 'area_m2', 'areaM2', 'area', 'floors',
+      'ceiling_height_cm', 'ceilingHeight', 'ceilingHeightCm', 'email', 'phone', 'company']
+      .map((name) => name.toLowerCase().replace(/[^a-z0-9]/g, '')),
+  )
+  for (const key of Object.keys(payload)) {
+    if (dropped.has(key.toLowerCase().replace(/[^a-z0-9]/g, ''))) delete payload[key]
   }
 
   return payload

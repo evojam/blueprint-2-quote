@@ -67,6 +67,64 @@ describe('rfq_intake inbox action registry', () => {
     expect(normalized.customer).toBeUndefined()
   })
 
+  // Second live run (proposal 73f041c8), after the promptSchema fix. The contact is
+  // flat now — the prompt did its job — but the model still invents keys, and it spelled
+  // the ceiling height a THIRD way: `ceiling_height_cm`, then `ceilingHeightCm`, now
+  // `ceilingHeight_cm`. Enumerating spellings loses this race; matching on letters and
+  // digits alone does not.
+  it('folds a fact in whatever spelling the model reaches for', async () => {
+    const registry = await import('@/.mercato/generated/inbox-actions.generated')
+    const definition = registry.getInboxAction('create_quote')!
+
+    const normalized = await definition.normalizePayload!({
+      notes: 'Wycena orientacyjna.',
+      scope: ['Wykonanie gładzi na ścianach i sufitach', 'Malowanie ścian i sufitów'],
+      floors: 3,
+      area_m2: 240,
+      location: 'Warszawa, Wawer',
+      customerName: 'Artur Bańkowski',
+      customerEmail: 'artur@evojam.com',
+      ceilingHeight_cm: '275-295',
+    }, {} as never)
+
+    const notes = String(normalized.notes)
+    expect(notes).toContain('275-295')
+    expect(notes).toContain('240 m2')
+    expect(notes).toContain('Warszawa, Wawer')
+    // The stray key must not survive into the stored payload either.
+    expect(normalized.ceilingHeight_cm).toBeUndefined()
+    expect(definition.payloadSchema.safeParse(normalized).success).toBe(true)
+  })
+
+  it('never reconsiders a contact that already arrived on the canonical key', async () => {
+    const registry = await import('@/.mercato/generated/inbox-actions.generated')
+    const definition = registry.getInboxAction('create_quote')!
+
+    // A decoy under a looser alias must not win over the real value.
+    const normalized = await definition.normalizePayload!({
+      customerName: 'Artur Bańkowski',
+      customerEmail: 'artur@evojam.com',
+      name: 'Rzuty inwentaryzacyjne',
+      email: 'noreply@example.com',
+    }, {} as never)
+
+    expect(normalized.customerName).toBe('Artur Bańkowski')
+    expect(normalized.customerEmail).toBe('artur@evojam.com')
+  })
+
+  it('finds the contact under a snake spelling of the canonical key', async () => {
+    const registry = await import('@/.mercato/generated/inbox-actions.generated')
+    const definition = registry.getInboxAction('create_quote')!
+
+    const normalized = await definition.normalizePayload!({
+      customer_name: 'Artur Bańkowski',
+      customer_email: 'artur@evojam.com',
+    }, {} as never)
+
+    expect(normalized.customerName).toBe('Artur Bańkowski')
+    expect(normalized.customerEmail).toBe('artur@evojam.com')
+  })
+
   it('reaches the model with a schema of its own, not the filtered placeholder', async () => {
     const registry = await import('@/.mercato/generated/inbox-actions.generated')
     const definition = registry.getInboxAction('create_quote')!
