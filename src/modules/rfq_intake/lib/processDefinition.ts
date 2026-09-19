@@ -42,8 +42,7 @@ export type EnsureOptions = {
 function codeOwnedFields(): { name: string; description: string; triggers: ProcessTrigger[] } {
   return {
     name: 'RFQ document analysis',
-    description:
-      'Reads the RFQ PDF, measures every floor plan, and matches every requirement against the catalog.',
+    description: 'Reads the RFQ PDF and matches its brief against the catalog.',
     triggers: [{ kind: 'manual', requireFeatures: [] }],
   }
 }
