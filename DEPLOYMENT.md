@@ -318,13 +318,36 @@ crash-loop:
 3. `opencode` polls `http://localhost:3001/health` and the key file
    (`OPENCODE_MCP_KEY_WAIT_SECONDS`, default **1800 s**), writes `opencode.jsonc`, serves 4096.
 
-Give both a generous `startPeriod` in the ECS health check — compose uses `start_period:
-900s`. Use ECS `dependsOn` with `condition: START` for `mcp` → `app` and `opencode` → `mcp`;
-do not use `HEALTHY`, or the 30-minute waits become deploy-blocking.
+Use ECS `dependsOn` with `condition: START` for `mcp` → `app` and `opencode` → `mcp`. Not
+`HEALTHY`: that requires a container health check, and the 30-minute waits would become
+deploy-blocking.
+
+**Do not copy the compose health checks into the task definition.** ECS validates these
+fields at `RegisterTaskDefinition` and rejects the whole revision with a 400 — no new task
+definition, no rollout, and the service quietly keeps serving the previous revision:
+
+| Field | ECS range | Compose value | On ECS |
+|---|---|---|---|
+| `retries` | 1–10 | `20` | rejected |
+| `startPeriod` | 0–300 s | `start_period: 900s` | rejected |
+| `interval` | 5–300 s | `30s` | fine |
+| `timeout` | 2–60 s | `5s` / `6s` | fine |
+
+(Ranges from the [ECS HealthCheck API reference](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_HealthCheck.html).)
+
+A 1800 s bootstrap simply cannot be expressed as an ECS container health check — the
+grace period caps at 300 s. **The recommendation is to give the sidecars no `healthCheck`
+at all** and let `dependsOn: START` plus the entrypoints' own waiting do the sequencing.
+
+Mark both sidecars `essential: false`. An essential container that fails its health check
+or exits takes the whole task down and the service replaces it, which against a 30-minute
+bootstrap is a restart loop that never converges. With `essential: false` a broken agent
+plane degrades to red badges while the app keeps serving.
 
 On timeout `opencode` starts **anyway**, unauthenticated against MCP, and logs a warning.
-It will look up and answer 401 on every tool call. Check the container log for
-`MCP API key loaded from file` before believing a green health check.
+It will come up listening on 4096 and answer 401 on every tool call — a running container
+proves nothing here. Grep its log for `MCP API key loaded from file` before believing the
+plane is wired.
 
 ### The MCP API key handoff
 
@@ -428,6 +451,43 @@ file-defined agents in `docker/opencode/agents/` available to drive it.
   `opencode` (`OM_OPENCODE_WORKSPACE_ROOT`, `OM_OPENCODE_WORKSPACE_ROOT_CONTAINER`) — a
   second shared volume. Left out here deliberately; agents that only read data and submit
   outcomes do not need it.
+- **Tool search indexing fails against an SSL-only database.** Upstream bug, not an infra
+  problem. On start the MCP server logs:
+
+  ```
+  Failed to index 83 tools: vector (no pg_hba.conf entry for host "10.2.1.191", no encryption)
+  Search indexing skipped (search service not available)
+  ```
+
+  `@open-mercato/search` opens two pools of its own — `src/modules/search/di.ts:78` and
+  `src/vector/drivers/pgvector/index.ts:112` — as bare
+  `new Pool({ connectionString: dbUrl })`. Neither passes `ssl`, and the package never
+  calls `getSslConfig()` (`@open-mercato/shared/src/lib/db/ssl.ts`), which is what the
+  app's own MikroORM pool uses. With `DB_SSL=true` the main connection is encrypted and
+  these two are not, so RDS refuses them.
+
+  It is not a regression. The app container never reaches this code; `http-server.ts:444`
+  calls `indexToolsForSearch` unconditionally at MCP startup, and that startup is a path
+  this deployment ran for the first time. Note also that
+  `OM_DISABLE_VECTOR_SEARCH_AUTOINDEXING` does **not** gate it — that flag covers entity
+  auto-indexing, not tool indexing — and the `catch` misreports the cause as "search
+  service not available" when the service was available and the connection was not.
+
+  Impact is degradation, not failure: the MCP server starts, tools are served, and an
+  agent calling a tool by name works. Only `tool_search` is affected, and it can come
+  back empty.
+
+  **Workaround — keeps the feature on.** Append `?sslmode=no-verify` to `DATABASE_URL` on
+  the `mcp` container **and keep `DB_SSL=true`**. Both pools take the connection string
+  straight to `pg`, and `pg-connection-string` (2.14.0, `index.js:153`) maps `no-verify`
+  to `ssl.rejectUnauthorized = false`, so they connect encrypted without needing the RDS
+  CA bundle. `DB_SSL=true` has to stay because `getSslConfig()` matches only
+  `sslmode=require`, `ssl=true` or `DB_SSL=true` — it does not recognise `no-verify`, so
+  dropping it would silently unencrypt the app's own pool.
+
+  Do **not** use `?sslmode=require` instead: outside libpq-compat mode that enables
+  verification without supplying a CA, which fails against RDS.
+
 - **Unverified on ECS.** Everything in this section is derived from the compose
   definitions, the two entrypoints and the module sources, plus a local `linux/amd64` build
   of the `opencode` image. The four-container task has not been run on Fargate.
