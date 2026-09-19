@@ -10,6 +10,11 @@ import { PDF_AGENT_ID } from '@/modules/property_documents/ai-tools'
  */
 registerWorkflowSafeCommands([
   {
+    commandId: 'rfq_intake.deal.advance',
+    requiredFeatures: ['customers.deals.manage'],
+    labelKey: 'rfq_intake.workflows.commands.deal.advance',
+  },
+  {
     commandId: 'rfq_intake.plans.analyze',
     requiredFeatures: ['customers.deals.manage'],
     labelKey: 'rfq_intake.workflows.commands.plans.analyze',
@@ -20,6 +25,12 @@ registerWorkflowSafeCommands([
     labelKey: 'rfq_intake.workflows.commands.requirements.match',
   },
 ])
+
+/**
+ * Exported so tests and any future seeder name the workflow once. Two literals
+ * drifting apart would leave a trigger pointing at a workflow that does not exist.
+ */
+export const RFQ_ANALYSIS_WORKFLOW_ID = 'rfq_intake.analysis'
 
 /**
  * RFQ analysis chain.
@@ -37,12 +48,35 @@ registerWorkflowSafeCommands([
  * them testable in isolation.
  */
 const rfqAnalysis = defineWorkflow({
-  workflowId: 'rfq_intake.analysis',
+  workflowId: RFQ_ANALYSIS_WORKFLOW_ID,
   workflowName: 'RFQ document analysis',
   description: 'Reads the RFQ PDF, measures every floor plan, and matches every requirement against the catalog.',
   metadata: { category: 'RFQ', tags: ['rfq', 'agents', 'property'], icon: 'file-search' },
   steps: [
     { stepId: 'start', stepName: 'Start', stepType: 'START', description: 'RFQ case opened from the inbox' },
+    {
+      stepId: 'mark_quoting',
+      stepName: 'Mark the case as being quoted',
+      stepType: 'AUTOMATED',
+      description: 'Moves the CRM case to `Wycena w toku`, so the funnel shows the engine started.',
+      activities: [
+        {
+          activityId: 'mark_quoting_activity',
+          activityName: 'Mark the case as being quoted',
+          activityType: 'UPDATE_ENTITY',
+          async: false,
+          config: {
+            commandId: 'rfq_intake.deal.advance',
+            input: {
+              tenantId: '{{workflow.tenantId}}',
+              organizationId: '{{workflow.organizationId}}',
+              dealId: '{{context.dealId}}',
+              stage: 'quoting',
+            },
+          },
+        },
+      ],
+    },
     {
       stepId: 'extract_pdf',
       stepName: 'Read the RFQ document',
@@ -119,13 +153,38 @@ const rfqAnalysis = defineWorkflow({
         },
       ],
     },
+    {
+      stepId: 'mark_review',
+      stepName: 'Hand the case to a human',
+      stepType: 'AUTOMATED',
+      description: 'Moves the CRM case to `Do sprawdzenia`: brief, geometry and matches are ready for review.',
+      activities: [
+        {
+          activityId: 'mark_review_activity',
+          activityName: 'Hand the case to a human',
+          activityType: 'UPDATE_ENTITY',
+          async: false,
+          config: {
+            commandId: 'rfq_intake.deal.advance',
+            input: {
+              tenantId: '{{workflow.tenantId}}',
+              organizationId: '{{workflow.organizationId}}',
+              dealId: '{{context.dealId}}',
+              stage: 'review',
+            },
+          },
+        },
+      ],
+    },
     { stepId: 'end', stepName: 'Done', stepType: 'END' },
   ],
   transitions: [
-    { transitionId: 't_start', transitionName: 'Start', fromStepId: 'start', toStepId: 'extract_pdf', trigger: 'auto' },
+    { transitionId: 't_start', transitionName: 'Start', fromStepId: 'start', toStepId: 'mark_quoting', trigger: 'auto' },
+    { transitionId: 't_extract', transitionName: 'Extract', fromStepId: 'mark_quoting', toStepId: 'extract_pdf', trigger: 'auto' },
     { transitionId: 't_measure', transitionName: 'Measure', fromStepId: 'extract_pdf', toStepId: 'measure_plans', trigger: 'auto' },
     { transitionId: 't_match', transitionName: 'Match', fromStepId: 'measure_plans', toStepId: 'match_catalog', trigger: 'auto' },
-    { transitionId: 't_done', transitionName: 'Done', fromStepId: 'match_catalog', toStepId: 'end', trigger: 'auto' },
+    { transitionId: 't_review', transitionName: 'Review', fromStepId: 'match_catalog', toStepId: 'mark_review', trigger: 'auto' },
+    { transitionId: 't_done', transitionName: 'Done', fromStepId: 'mark_review', toStepId: 'end', trigger: 'auto' },
   ],
   triggers: [
     {

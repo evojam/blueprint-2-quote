@@ -601,6 +601,7 @@
   "products.edit.title": "Produkt bearbeiten",
   "profile.title": "Profil",
   "resources.messageObjects.resource.title": "Resource",
+  "rfq_intake.workflows.commands.deal.advance": "RFQ: Vorgang in eine Pipeline-Phase verschieben",
   "rfq_intake.workflows.commands.plans.analyze": "Grundrisse der Anfrage analysieren",
   "rfq_intake.workflows.commands.requirements.match": "Anforderungen dem Katalog zuordnen",
   "rules.nav.group": "Geschäftsregeln",

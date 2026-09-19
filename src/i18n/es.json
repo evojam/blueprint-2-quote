@@ -601,6 +601,7 @@
   "products.edit.title": "Editar producto",
   "profile.title": "Perfil",
   "resources.messageObjects.resource.title": "Resource",
+  "rfq_intake.workflows.commands.deal.advance": "RFQ: mover el caso a una etapa del embudo",
   "rfq_intake.workflows.commands.plans.analyze": "Analizar los planos de la solicitud",
   "rfq_intake.workflows.commands.requirements.match": "Asociar los requisitos al catálogo",
   "rules.nav.group": "Reglas de negocio",
