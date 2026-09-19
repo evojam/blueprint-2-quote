@@ -1,8 +1,9 @@
-import { mkdtemp, mkdir, readFile, readdir, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { describe, expect, it, jest } from '@jest/globals'
+import { createCanvas } from '@napi-rs/canvas'
 import { z } from 'zod'
+import { describe, expect, it, jest } from '@jest/globals'
 import type { McpToolContext } from '@open-mercato/ai-assistant/modules/ai_assistant/lib/types'
 import { getAgentEntry } from '@open-mercato/enterprise/modules/agent_orchestrator/lib/sdk/defineAgent'
 
@@ -12,8 +13,14 @@ jest.mock('@open-mercato/ai-assistant/modules/ai_assistant/lib/agent-registry', 
 import { ROOM_DIMENSIONS_AGENT_ID } from '../ai-agents'
 import {
   PDF_AGENT_ID,
+  PDF_TOOL_ID,
   ROOM_DIMENSIONS_TOOL_ID,
+  ROOM_MEASUREMENTS_AGENT_ID,
+  ROOM_MEASUREMENTS_TOOL_ID,
+  ROOM_MEASUREMENTS_VISION_SERVICE,
+  aiTools,
   createRoomDimensionsVisionTool,
+  createRoomMeasurementsVisionTool,
   createProcessPdfTool,
   processPdfInputSchema,
   resolveSessionWorkspace,
@@ -21,6 +28,8 @@ import {
   type RoomDimensionsVisionRuntime,
   type RoomDimensionsVisionResult,
 } from '../ai-tools'
+import type { RoomMeasurementSet } from '../room-measurements-contract'
+import type { RoomMeasurementsVisionRuntime } from '../room-measurements-vision'
 
 const SESSION_TOKEN = `sess_${'a'.repeat(32)}`
 
@@ -34,19 +43,75 @@ async function makeWorkspace(fileName = 'input.pdf'): Promise<{ root: string; in
   return { root, input }
 }
 
-function makeContext(agentId = PDF_AGENT_ID): McpToolContext {
+type ContextOptions = {
+  sessionId?: string | null
+  tenantId?: string | null
+  organizationId?: string | null
+  userId?: string | null
+  runId?: string | null
+}
+
+function optionOrDefault<T>(
+  options: ContextOptions,
+  key: keyof ContextOptions,
+  fallback: T,
+): T | null {
+  return key in options ? (options[key] as T | null) : fallback
+}
+
+function makeContext(
+  agentId: string | null = PDF_AGENT_ID,
+  options: ContextOptions = {},
+): McpToolContext {
   const store = {
     resolveActiveAgentId: jest.fn(async () => agentId),
-    resolveActiveRunId: jest.fn(async () => 'run-1'),
+    resolveActiveRunId: jest.fn(async () => optionOrDefault(options, 'runId', 'run-1')),
   }
   return {
-    tenantId: 'tenant-1',
-    organizationId: 'organization-1',
-    userId: 'user-1',
+    tenantId: optionOrDefault(options, 'tenantId', 'tenant-1'),
+    organizationId: optionOrDefault(options, 'organizationId', 'organization-1'),
+    userId: optionOrDefault(options, 'userId', 'user-1'),
     userFeatures: ['agent_orchestrator.agents.run'],
     isSuperAdmin: false,
-    sessionId: SESSION_TOKEN,
+    sessionId: optionOrDefault(options, 'sessionId', SESSION_TOKEN),
     container: { resolve: jest.fn(() => store) } as unknown as McpToolContext['container'],
+  } as McpToolContext
+}
+
+type TestImageFormat = 'png' | 'jpeg' | 'webp'
+
+async function writeTestImage(
+  filePath: string,
+  format: TestImageFormat,
+  width = 13,
+  height = 7,
+): Promise<void> {
+  const canvas = createCanvas(width, height)
+  const drawing = canvas.getContext('2d')
+  drawing.fillStyle = '#fff'
+  drawing.fillRect(0, 0, width, height)
+  await writeFile(filePath, await canvas.encode(format))
+}
+
+function makeRoomMeasurementResult(
+  imageWidthPx = 13,
+  imageHeightPx = 7,
+): RoomMeasurementSet {
+  return {
+    schemaVersion: '1',
+    analysisStatus: 'not_floor_plan',
+    drawing: {
+      imageWidthPx,
+      imageHeightPx,
+      declaredUnit: null,
+      declaredScale: null,
+      calibrations: [],
+      globalCeilingHeight: null,
+      confidence: 0.9,
+      warnings: [],
+    },
+    rooms: [],
+    warnings: [],
   }
 }
 
@@ -394,7 +459,7 @@ describe('property_documents.process_pdf', () => {
 describe('property_documents.extract_room_dimensions', () => {
   it('analyzes exactly one staged image for the active room-dimensions agent', async () => {
     const { root, input } = await makeWorkspace('floor-plan.png')
-    await writeFile(input, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    await writeTestImage(input, 'png')
     const resultFixture: RoomDimensionsVisionResult = {
       rooms: [
         {
@@ -456,5 +521,211 @@ describe('property_documents.extract_room_dimensions', () => {
     await expect(tool.handler({}, makeContext(ROOM_DIMENSIONS_AGENT_ID))).rejects.toThrow(
       'exactly one staged image',
     )
+  })
+})
+
+describe('property_documents.extract_room_measurements', () => {
+  it('publishes the stable v2 registration with a one-call budget after the v1 tools', () => {
+    const tool = createRoomMeasurementsVisionTool({
+      workspaceRoot: '/tmp/unused',
+      containerWorkspaceRoot: '/home/opencode/work',
+      analyzeImage: jest.fn(async () => makeRoomMeasurementResult()),
+    })
+
+    expect(ROOM_MEASUREMENTS_AGENT_ID).toBe('property_documents.room_measurements')
+    expect(ROOM_MEASUREMENTS_TOOL_ID).toBe('property_documents.extract_room_measurements')
+    expect(ROOM_MEASUREMENTS_VISION_SERVICE).toBe('propertyRoomMeasurementsVisionService')
+    expect(tool.name).toBe(ROOM_MEASUREMENTS_TOOL_ID)
+    expect(tool.maxCallsPerTurn).toBe(1)
+    expect(aiTools.map((registeredTool) => registeredTool.name)).toEqual([
+      PDF_TOOL_ID,
+      ROOM_DIMENSIONS_TOOL_ID,
+      ROOM_MEASUREMENTS_TOOL_ID,
+    ])
+  })
+
+  it.each([
+    ['png', 'image/png'],
+    ['jpeg', 'image/jpeg'],
+    ['webp', 'image/webp'],
+  ] as const)('forwards decoded %s bytes and pixel dimensions to vision', async (format, mediaType) => {
+    const { root, input } = await makeWorkspace(`floor-plan.${format}`)
+    await writeTestImage(input, format)
+    const resultFixture = makeRoomMeasurementResult()
+    const analyzeImage = jest.fn<RoomMeasurementsVisionRuntime['analyzeImage']>(
+      async () => resultFixture,
+    )
+    const runtime: RoomMeasurementsVisionRuntime = {
+      workspaceRoot: root,
+      containerWorkspaceRoot: '/home/opencode/work',
+      analyzeImage,
+    }
+    const tool = createRoomMeasurementsVisionTool(runtime)
+    const context = makeContext(ROOM_MEASUREMENTS_AGENT_ID)
+
+    await expect(tool.handler({}, context)).resolves.toEqual(resultFixture)
+    expect(analyzeImage).toHaveBeenCalledTimes(1)
+    expect(analyzeImage).toHaveBeenCalledWith({
+      dataUrl: expect.stringMatching(new RegExp(`^data:${mediaType};base64,`)),
+      imageWidthPx: 13,
+      imageHeightPx: 7,
+      context,
+    })
+  })
+
+  it('rejects zero or two staged files before vision analysis', async () => {
+    const emptyWorkspace = await makeWorkspace('floor-plan.png')
+    await rm(emptyWorkspace.input)
+    const emptyAnalyzeImage = jest.fn<RoomMeasurementsVisionRuntime['analyzeImage']>(
+      async () => makeRoomMeasurementResult(),
+    )
+    const emptyTool = createRoomMeasurementsVisionTool({
+      workspaceRoot: emptyWorkspace.root,
+      containerWorkspaceRoot: '/home/opencode/work',
+      analyzeImage: emptyAnalyzeImage,
+    })
+
+    await expect(
+      emptyTool.handler({}, makeContext(ROOM_MEASUREMENTS_AGENT_ID)),
+    ).rejects.toThrow('exactly one staged image')
+    expect(emptyAnalyzeImage).not.toHaveBeenCalled()
+
+    const twoFileWorkspace = await makeWorkspace('first.png')
+    await writeTestImage(twoFileWorkspace.input, 'png')
+    await writeTestImage(
+      path.join(twoFileWorkspace.root, SESSION_TOKEN, 'in', 'second.png'),
+      'png',
+    )
+    const twoFileAnalyzeImage = jest.fn<RoomMeasurementsVisionRuntime['analyzeImage']>(
+      async () => makeRoomMeasurementResult(),
+    )
+    const twoFileTool = createRoomMeasurementsVisionTool({
+      workspaceRoot: twoFileWorkspace.root,
+      containerWorkspaceRoot: '/home/opencode/work',
+      analyzeImage: twoFileAnalyzeImage,
+    })
+
+    await expect(
+      twoFileTool.handler({}, makeContext(ROOM_MEASUREMENTS_AGENT_ID)),
+    ).rejects.toThrow('exactly one staged image')
+    expect(twoFileAnalyzeImage).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['empty', () => Buffer.alloc(0), 'non-empty and at most 20 MiB'],
+    ['oversize', () => Buffer.alloc(20 * 1024 * 1024 + 1), 'non-empty and at most 20 MiB'],
+    ['unsupported', () => Buffer.from('not an image'), 'PNG, JPEG, or WebP'],
+    [
+      'corrupt',
+      () => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      'decodable PNG, JPEG, or WebP',
+    ],
+  ])('rejects %s image bytes before vision analysis', async (_label, bytes, message) => {
+    const { root, input } = await makeWorkspace('floor-plan.png')
+    await writeFile(input, bytes())
+    const analyzeImage = jest.fn<RoomMeasurementsVisionRuntime['analyzeImage']>(
+      async () => makeRoomMeasurementResult(),
+    )
+    const tool = createRoomMeasurementsVisionTool({
+      workspaceRoot: root,
+      containerWorkspaceRoot: '/home/opencode/work',
+      analyzeImage,
+    })
+
+    await expect(tool.handler({}, makeContext(ROOM_MEASUREMENTS_AGENT_ID))).rejects.toThrow(
+      message,
+    )
+    expect(analyzeImage).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['session', ROOM_MEASUREMENTS_AGENT_ID, { sessionId: null }, 'active canonical run session'],
+    [
+      'tenant scope',
+      ROOM_MEASUREMENTS_AGENT_ID,
+      { tenantId: null },
+      'tenant, organization, and user scope',
+    ],
+    [
+      'organization scope',
+      ROOM_MEASUREMENTS_AGENT_ID,
+      { organizationId: null },
+      'tenant, organization, and user scope',
+    ],
+    [
+      'user scope',
+      ROOM_MEASUREMENTS_AGENT_ID,
+      { userId: null },
+      'tenant, organization, and user scope',
+    ],
+    ['run', ROOM_MEASUREMENTS_AGENT_ID, { runId: null }, 'no active run'],
+    ['matching agent', 'other.agent', {}, 'active agent mismatch'],
+  ] satisfies Array<[string, string, ContextOptions, string]>)(
+    'requires an active trusted %s',
+    async (_label, agentId, options, message) => {
+      const { root, input } = await makeWorkspace('floor-plan.png')
+      await writeTestImage(input, 'png')
+      const analyzeImage = jest.fn<RoomMeasurementsVisionRuntime['analyzeImage']>(
+        async () => makeRoomMeasurementResult(),
+      )
+      const tool = createRoomMeasurementsVisionTool({
+        workspaceRoot: root,
+        containerWorkspaceRoot: '/home/opencode/work',
+        analyzeImage,
+      })
+
+      await expect(tool.handler({}, makeContext(agentId, options))).rejects.toThrow(message)
+      expect(analyzeImage).not.toHaveBeenCalled()
+    },
+  )
+
+  it('keeps v1 and v2 active-run authorization mutually exclusive', async () => {
+    const { root, input } = await makeWorkspace('floor-plan.png')
+    await writeTestImage(input, 'png')
+    const v1AnalyzeImage = jest.fn<RoomDimensionsVisionRuntime['analyzeImage']>(
+      async () => ({ rooms: [] }),
+    )
+    const v2AnalyzeImage = jest.fn<RoomMeasurementsVisionRuntime['analyzeImage']>(
+      async () => makeRoomMeasurementResult(),
+    )
+    const v1Tool = createRoomDimensionsVisionTool({
+      workspaceRoot: root,
+      containerWorkspaceRoot: '/home/opencode/work',
+      analyzeImage: v1AnalyzeImage,
+    })
+    const v2Tool = createRoomMeasurementsVisionTool({
+      workspaceRoot: root,
+      containerWorkspaceRoot: '/home/opencode/work',
+      analyzeImage: v2AnalyzeImage,
+    })
+
+    await expect(v1Tool.handler({}, makeContext(ROOM_MEASUREMENTS_AGENT_ID))).rejects.toThrow(
+      'active agent mismatch',
+    )
+    await expect(v2Tool.handler({}, makeContext(ROOM_DIMENSIONS_AGENT_ID))).rejects.toThrow(
+      'active agent mismatch',
+    )
+    expect(v1AnalyzeImage).not.toHaveBeenCalled()
+    expect(v2AnalyzeImage).not.toHaveBeenCalled()
+  })
+
+  it('rejects extra input fields and invalid service output', async () => {
+    const { root, input } = await makeWorkspace('floor-plan.png')
+    await writeTestImage(input, 'png')
+    const invalidResult = { ...makeRoomMeasurementResult(), modelVerdict: true }
+    const analyzeImage = jest.fn<RoomMeasurementsVisionRuntime['analyzeImage']>(
+      async () => invalidResult as RoomMeasurementSet,
+    )
+    const tool = createRoomMeasurementsVisionTool({
+      workspaceRoot: root,
+      containerWorkspaceRoot: '/home/opencode/work',
+      analyzeImage,
+    })
+    const context = makeContext(ROOM_MEASUREMENTS_AGENT_ID)
+
+    await expect(tool.handler({ unexpected: true }, context)).rejects.toBeInstanceOf(z.ZodError)
+    expect(analyzeImage).not.toHaveBeenCalled()
+    await expect(tool.handler({}, context)).rejects.toBeInstanceOf(z.ZodError)
+    expect(analyzeImage).toHaveBeenCalledTimes(1)
   })
 })
