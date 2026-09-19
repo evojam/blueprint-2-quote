@@ -17,7 +17,8 @@ jest.mock('@open-mercato/shared/lib/commands', () => ({
 // runtime is >= 24.9: switch the import back to
 // `import { metadata } from '../api/document-links/route'` and assert
 // against that.
-import { documentLinksRouteAccess as metadata } from '../lib/route-access'
+import { documentLinksRouteAccess as metadata, DOCUMENT_LINK_ENTITY_ID } from '../lib/route-access'
+import { E } from '@/.mercato/generated/entities.ids.generated'
 
 describe('deal document links route', () => {
   it('requires authentication on every exposed method', () => {
@@ -33,5 +34,15 @@ describe('deal document links route', () => {
   it('gates reads behind deal view and writes behind deal manage', () => {
     expect(metadata.GET?.requireFeatures).toEqual(['customers.deals.view'])
     expect(metadata.POST?.requireFeatures).toEqual(['customers.deals.manage'])
+  })
+
+  // Depends on `yarn generate` having run: `.mercato/generated` is gitignored,
+  // so `E.deal_links.deal_document_link` only exists locally after generation.
+  // That is already the repo's gate order (`generate && typecheck && lint`),
+  // but a stale checkout without a generate run will fail this test with a
+  // module-resolution error rather than an assertion failure — that is
+  // expected, not a bug in the test.
+  it('uses the entity id the generator actually registers', () => {
+    expect(DOCUMENT_LINK_ENTITY_ID).toBe(E.deal_links.deal_document_link)
   })
 })
