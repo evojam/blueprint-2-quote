@@ -18,7 +18,7 @@
   "deal_links.state.empty": "No quote has been produced for this case yet.",
   "deal_links.state.error": "Could not load the linked documents.",
   "deal_links.state.loading": "Loading…",
-  "deal_links.tab.label": "Quote",
+  "deal_links.tab.label": "Quotes and orders",
   "deal_links.widget.link.error": "Could not link the document.",
   "deal_links.widget.link.placeholder": "Search by quote or order number…",
   "deal_links.widget.link.submit": "Link",
