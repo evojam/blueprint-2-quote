@@ -299,13 +299,19 @@ export const inboxActions: InboxActionDefinition[] = [
     // `scope`). Spelling the payload out here is what stops the drift at the source;
     // `normalizeRfqPayload` catches what still slips through.
     promptSchema: `create_quote payload (a property or renovation RFQ — a CASE, not a priced document):
-{ customerName: string (the sender's full personal name), customerEmail?: string, customerPhone?: string, companyName?: string, customerEntityId?: uuid, currencyCode?: string (3-letter ISO), lineItems?: [{ productName: string (REQUIRED), quantity: string, unitPrice?: string, kind?: "product"|"service", description?: string }], notes?: string }
-Use THESE key names exactly. Do not nest the contact under a "customer" object, and do not invent keys such as "scope", "area_m2", "floors" or "location" — the enquiry's scope, area, storey count, ceiling heights and location all belong in "notes" as plain text.`,
+{ customerName: string (the sender's full personal name), customerEmail?: string, customerPhone?: string, companyName?: string, customerEntityId?: uuid, currencyCode?: string (3-letter ISO), notes?: string }
+Use THESE key names exactly. Do not nest the contact under a "customer" object, and do not invent keys such as "scope", "area_m2", "floors" or "location" — the enquiry's scope, area, storey count, ceiling heights and location all belong in "notes" as plain text.
+There is NO "lineItems" field on this payload. The work the customer is asking for goes in "notes" as plain text, one item per line.`,
     promptRules: [
       'A property or renovation enquiry that arrives with a PDF brief, floor plan, or drawing is a create_quote action, even when no prices are mentioned: accepting it opens the case and starts the document analysis.',
       'For create_quote: always carry customerEmail when the thread reveals it, plus customerPhone and companyName when the signature or body gives them. They are used to guarantee the CRM contact before the case is opened.',
       'For create_quote: customerName must be the sender\'s full personal name as written in the signature or the From header (both given and family name, e.g. "Marek Grochala"), not a greeting, not a role, and not the company. Fall back to the company name only when the thread names no person at all, and omit the field entirely when the thread reveals no name — never invent one from the e-mail address.',
-      'For a create_quote that is a property or renovation enquiry: do not invent prices or line items that the thread does not state. An enquiry whose detail lives in an attached PDF may carry no line items at all.',
+      // Emitting line items is what locks the enquiry out of the inbox: every one that
+      // does not resolve to a catalog product becomes a blocking `product_not_found`
+      // discrepancy (`extractionWorker.ts`), and an RFQ names work the catalog has no
+      // row for by definition. The subscriber that clears those blockers is the belt;
+      // this is the braces, and it is the cheaper of the two.
+      'For create_quote: never emit lineItems. This action opens a case, not a priced document — the requested work is described in "notes" as plain text and priced later against measurements. Do not invent prices either.',
       // HACK(hackathon): currencyCode is unused by this action — the RFQ case carries no
       // money. It is emitted only to silence the installed `no_currency_resolved`
       // discrepancy, which fires on EVERY create_quote because `SalesChannel` has no
