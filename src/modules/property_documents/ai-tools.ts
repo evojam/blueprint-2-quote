@@ -13,18 +13,27 @@ import {
 } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import { loadImage } from '@napi-rs/canvas'
 import { z } from 'zod'
 import { defineAiTool } from '@open-mercato/ai-assistant/modules/ai_assistant/lib/ai-tool-definition'
 import type {
   AiToolDefinition,
   McpToolContext,
 } from '@open-mercato/ai-assistant/modules/ai_assistant/lib/types'
+import {
+  roomMeasurementSetSchema,
+  type RoomMeasurementSet,
+} from './room-measurements-contract'
+import type { RoomMeasurementsVisionRuntime } from './room-measurements-vision'
 
 export const PDF_AGENT_ID = 'property_documents.pdf_intake'
 export const PDF_TOOL_ID = 'property_documents.process_pdf'
 export const ROOM_DIMENSIONS_AGENT_ID = 'property_documents.room_dimensions'
 export const ROOM_DIMENSIONS_TOOL_ID = 'property_documents.extract_room_dimensions'
 export const ROOM_DIMENSIONS_VISION_SERVICE = 'propertyRoomDimensionsVisionService' as const
+export const ROOM_MEASUREMENTS_AGENT_ID = 'property_documents.room_measurements'
+export const ROOM_MEASUREMENTS_TOOL_ID = 'property_documents.extract_room_measurements'
+export const ROOM_MEASUREMENTS_VISION_SERVICE = 'propertyRoomMeasurementsVisionService' as const
 export const MAX_PDF_PAGES = 48
 export const MAX_PDF_ARTIFACTS = 50
 
@@ -68,6 +77,7 @@ export const roomDimensionsVisionResultSchema = z
   .strict()
 
 const roomDimensionsVisionInputSchema = z.object({}).strict()
+const roomMeasurementsVisionInputSchema = z.object({}).strict()
 
 export const processPdfInputSchema = z
   .object({ operation: z.enum(['inspect', 'finalize']) })
@@ -98,6 +108,17 @@ export interface RoomDimensionsVisionRuntime {
   workspaceRoot: string
   containerWorkspaceRoot: string
   analyzeImage(input: RoomDimensionsVisionRequest): Promise<RoomDimensionsVisionResult>
+}
+
+type ImageWorkspaceRuntime = {
+  workspaceRoot: string
+  containerWorkspaceRoot: string
+}
+
+type StagedRoomImage = {
+  dataUrl: string
+  imageWidthPx: number
+  imageHeightPx: number
 }
 
 export type SessionWorkspace = {
@@ -195,6 +216,20 @@ function defaultRoomDimensionsVisionRuntime(): RoomDimensionsVisionRuntime {
   }
 }
 
+function defaultRoomMeasurementsVisionRuntime(): RoomMeasurementsVisionRuntime {
+  return {
+    workspaceRoot: process.env.OM_OPENCODE_WORKSPACE_ROOT?.trim() || '/home/opencode/work',
+    containerWorkspaceRoot:
+      process.env.OM_OPENCODE_WORKSPACE_ROOT_CONTAINER?.trim() || '/home/opencode/work',
+    async analyzeImage(input) {
+      const service = input.context.container.resolve<
+        Pick<RoomMeasurementsVisionRuntime, 'analyzeImage'>
+      >(ROOM_MEASUREMENTS_VISION_SERVICE)
+      return service.analyzeImage(input)
+    },
+  }
+}
+
 function assertContained(parent: string, candidate: string, label: string): void {
   if (candidate === parent || !candidate.startsWith(`${parent}${path.sep}`)) {
     throw new Error(`[internal] PDF tool ${label} is outside configured root`)
@@ -262,16 +297,18 @@ async function requireActiveWorkspace(
   return resolveSessionWorkspace(runtime.workspaceRoot, token, runtime.containerWorkspaceRoot)
 }
 
-async function requireRoomDimensionsWorkspace(
+async function requireScopedImageWorkspace(
   context: McpToolContext,
-  runtime: RoomDimensionsVisionRuntime,
+  runtime: ImageWorkspaceRuntime,
+  expectedAgentId: string,
+  toolLabel: string,
 ): Promise<SessionWorkspace> {
   const token = context.sessionId
   if (!token || !SESSION_TOKEN_RE.test(token)) {
-    throw new Error('[internal] Room dimensions tool requires an active canonical run session')
+    throw new Error(`[internal] ${toolLabel} requires an active canonical run session`)
   }
   if (!context.tenantId || !context.organizationId || !context.userId) {
-    throw new Error('[internal] Room dimensions tool requires tenant, organization, and user scope')
+    throw new Error(`[internal] ${toolLabel} requires tenant, organization, and user scope`)
   }
 
   const store = context.container.resolve<SessionStore>('agentRunSessionStore')
@@ -279,9 +316,9 @@ async function requireRoomDimensionsWorkspace(
     store.resolveActiveAgentId(token),
     store.resolveActiveRunId(token),
   ])
-  if (!runId) throw new Error('[internal] Room dimensions tool has no active run')
-  if (agentId !== ROOM_DIMENSIONS_AGENT_ID) {
-    throw new Error('[internal] Room dimensions tool active agent mismatch')
+  if (!runId) throw new Error(`[internal] ${toolLabel} has no active run`)
+  if (agentId !== expectedAgentId) {
+    throw new Error(`[internal] ${toolLabel} active agent mismatch`)
   }
 
   return resolveSessionWorkspace(runtime.workspaceRoot, token, runtime.containerWorkspaceRoot)
@@ -314,7 +351,10 @@ function detectImageMediaType(bytes: Buffer): 'image/png' | 'image/jpeg' | 'imag
   return null
 }
 
-async function readSingleRoomImage(workspace: SessionWorkspace): Promise<string> {
+async function readSingleStagedImage(
+  workspace: SessionWorkspace,
+  subject: string,
+): Promise<StagedRoomImage> {
   // HACK(hackathon): Enterprise 0.8 exposes no pre-staging count/manifest; two
   // attachments with the same sanitized destination can collapse upstream.
   // Remove this residual once the stager supports per-agent cardinality.
@@ -322,17 +362,35 @@ async function readSingleRoomImage(workspace: SessionWorkspace): Promise<string>
     entry.isFile(),
   )
   if (entries.length !== 1) {
-    throw new Error('Room dimensions extraction requires exactly one staged image')
+    throw new Error(`${subject} extraction requires exactly one staged image`)
   }
 
   const inputPath = path.join(workspace.inDir, entries[0]!.name)
   const bytes = await readFile(inputPath)
   if (bytes.length === 0 || bytes.length > MAX_ROOM_IMAGE_BYTES) {
-    throw new Error('Room dimensions image must be non-empty and at most 20 MiB')
+    throw new Error(`${subject} image must be non-empty and at most 20 MiB`)
   }
   const mediaType = detectImageMediaType(bytes)
-  if (!mediaType) throw new Error('Room dimensions input must be a PNG, JPEG, or WebP image')
-  return `data:${mediaType};base64,${bytes.toString('base64')}`
+  if (!mediaType) throw new Error(`${subject} input must be a PNG, JPEG, or WebP image`)
+
+  try {
+    const decoded = await loadImage(bytes)
+    if (
+      !Number.isInteger(decoded.width) ||
+      decoded.width <= 0 ||
+      !Number.isInteger(decoded.height) ||
+      decoded.height <= 0
+    ) {
+      throw new Error('invalid decoded image dimensions')
+    }
+    return {
+      dataUrl: `data:${mediaType};base64,${bytes.toString('base64')}`,
+      imageWidthPx: decoded.width,
+      imageHeightPx: decoded.height,
+    }
+  } catch {
+    throw new Error(`${subject} input must be a decodable PNG, JPEG, or WebP image`)
+  }
 }
 
 async function findSingleInput(workspace: SessionWorkspace): Promise<string | ProcessingFailure> {
@@ -664,10 +722,45 @@ export function createRoomDimensionsVisionTool(
     inputSchema: roomDimensionsVisionInputSchema,
     async handler(rawInput, context) {
       roomDimensionsVisionInputSchema.parse(rawInput)
-      const workspace = await requireRoomDimensionsWorkspace(context, runtime)
-      const dataUrl = await readSingleRoomImage(workspace)
+      const workspace = await requireScopedImageWorkspace(
+        context,
+        runtime,
+        ROOM_DIMENSIONS_AGENT_ID,
+        'Room dimensions tool',
+      )
+      const image = await readSingleStagedImage(workspace, 'Room dimensions')
       return roomDimensionsVisionResultSchema.parse(
-        await runtime.analyzeImage({ dataUrl, context }),
+        await runtime.analyzeImage({ dataUrl: image.dataUrl, context }),
+      )
+    },
+  })
+}
+
+export function createRoomMeasurementsVisionTool(
+  runtime?: RoomMeasurementsVisionRuntime,
+): AiToolDefinition {
+  const resolvedRuntime = runtime ?? defaultRoomMeasurementsVisionRuntime()
+  return defineAiTool<unknown, RoomMeasurementSet>({
+    name: ROOM_MEASUREMENTS_TOOL_ID,
+    displayName: 'Property documents — extract room measurements',
+    description:
+      'Analyze the single floor-plan image staged for the active room-measurements run. Returns server-validated room geometry, measurements, evidence, and calculation readiness; session, scope, image bytes, dimensions, and model invocation are server-owned.',
+    tags: ['read', 'property-documents', 'image', 'vision'],
+    isMutation: false,
+    maxCallsPerTurn: 1,
+    requiredFeatures: ['agent_orchestrator.agents.run'],
+    inputSchema: roomMeasurementsVisionInputSchema,
+    async handler(rawInput, context) {
+      roomMeasurementsVisionInputSchema.parse(rawInput)
+      const workspace = await requireScopedImageWorkspace(
+        context,
+        resolvedRuntime,
+        ROOM_MEASUREMENTS_AGENT_ID,
+        'Room measurements tool',
+      )
+      const image = await readSingleStagedImage(workspace, 'Room measurements')
+      return roomMeasurementSetSchema.parse(
+        await resolvedRuntime.analyzeImage({ ...image, context }),
       )
     },
   })
@@ -676,5 +769,6 @@ export function createRoomDimensionsVisionTool(
 export const aiTools: AiToolDefinition[] = [
   createProcessPdfTool(),
   createRoomDimensionsVisionTool(),
+  createRoomMeasurementsVisionTool(),
 ]
 export default aiTools
