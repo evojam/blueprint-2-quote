@@ -15,6 +15,7 @@ jest.mock('@open-mercato/ai-assistant/modules/ai_assistant/lib/agent-registry', 
 }))
 
 import '../../../modules'
+import '../ai-agents'
 import { register } from '../di'
 import {
   ensureAgentsLoaded,
@@ -22,24 +23,42 @@ import {
 } from '@open-mercato/enterprise/modules/agent_orchestrator/lib/sdk/defineAgent'
 import {
   PDF_AGENT_ID,
-  PDF_TEXT_READER_AGENT_ID,
   ROOM_DIMENSIONS_AGENT_ID,
   ROOM_DIMENSIONS_VISION_SERVICE,
   ROOM_MEASUREMENTS_AGENT_ID,
   ROOM_MEASUREMENTS_VISION_SERVICE,
 } from '../ai-tools'
+
 describe('property document file-agent bootstrap', () => {
-  it('loads supported file agents and excludes the retired text reader', async () => {
+  it('loads supported file agents, adds room measurements, and excludes the retired text reader', async () => {
     await ensureAgentsLoaded()
-    expect(getAgentEntry('property_documents.pdf_intake')?.files).toEqual({
-      enabled: true,
-      inputs: true,
-      outputs: true,
-      bash: false,
-    })
-    expect(getAgentEntry('property_documents.pdf_intake')?.sourceFiles).toEqual(
-      expect.arrayContaining([expect.objectContaining({ path: 'AGENT.md' })]),
-    )
+
+    for (const agentId of [PDF_AGENT_ID, ROOM_DIMENSIONS_AGENT_ID, ROOM_MEASUREMENTS_AGENT_ID]) {
+      expect(getAgentEntry(agentId)?.files).toEqual({
+        enabled: true,
+        inputs: true,
+        outputs: true,
+        bash: false,
+      })
+      expect(getAgentEntry(agentId)?.sourceFiles).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: 'AGENT.md' })]),
+      )
+    }
+
     expect(getAgentEntry('property_documents.pdf_text_reader')).toBeUndefined()
+  })
+
+  it('registers both room vision services without replacing either one', () => {
+    const registerServices = jest.fn()
+
+    register({ register: registerServices } as unknown as AppContainer)
+
+    expect(registerServices).toHaveBeenCalledTimes(1)
+    expect(registerServices.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        [ROOM_DIMENSIONS_VISION_SERVICE]: expect.anything(),
+        [ROOM_MEASUREMENTS_VISION_SERVICE]: expect.anything(),
+      }),
+    )
   })
 })
