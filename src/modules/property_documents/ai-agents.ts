@@ -14,11 +14,7 @@ import {
   fileAgentDescriptors,
   type FileAgentDescriptor,
 } from '../../../.mercato/generated/file-agents.generated'
-import {
-  PDF_AGENT_ID,
-  PDF_TEXT_READER_AGENT_ID,
-  ROOM_DIMENSIONS_AGENT_ID,
-} from './ai-tools'
+import { PDF_AGENT_ID, ROOM_DIMENSIONS_AGENT_ID } from './ai-tools'
 
 export { ROOM_DIMENSIONS_AGENT_ID } from './ai-tools'
 
@@ -150,7 +146,6 @@ const catalogMatcherAgent = registerCatalogMatcherAgent()
 
 const FILE_CONFIGS: Record<string, FileAgentFilesConfig> = {
   [PDF_AGENT_ID]: { enabled: true, inputs: true, outputs: true, bash: false },
-  [PDF_TEXT_READER_AGENT_ID]: { enabled: true, inputs: true, outputs: false, bash: false },
   // HACK(hackathon): enterprise 0.8 enables every file workspace only when outputs=true;
   // the generated OpenCode policy still denies writes, so this agent captures no files.
   [ROOM_DIMENSIONS_AGENT_ID]: { enabled: true, inputs: true, outputs: true, bash: false },
@@ -191,7 +186,7 @@ function registerGeneratedFileAgent(descriptor: FileAgentDescriptor): void {
   }
 }
 
-for (const agentId of [PDF_AGENT_ID, PDF_TEXT_READER_AGENT_ID, ROOM_DIMENSIONS_AGENT_ID]) {
+for (const agentId of [PDF_AGENT_ID, ROOM_DIMENSIONS_AGENT_ID]) {
   const descriptor = fileAgentDescriptors.find((candidate) => candidate.id === agentId)
   if (!descriptor) {
     throw new Error(`[internal] missing generated file-agent descriptor "${agentId}"`)
@@ -199,6 +194,5 @@ for (const agentId of [PDF_AGENT_ID, PDF_TEXT_READER_AGENT_ID, ROOM_DIMENSIONS_A
   registerGeneratedFileAgent(descriptor)
 }
 
-export { PDF_TEXT_READER_AGENT_ID }
 export const aiAgents: AiAgentDefinition[] = [catalogMatcherAgent]
 export default aiAgents

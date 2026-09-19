@@ -3,51 +3,10 @@ import { access, mkdtemp, mkdir, readFile, utimes, writeFile } from 'node:fs/pro
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { describe, expect, it, jest } from '@jest/globals'
-
-jest.mock('@open-mercato/ai-assistant/modules/ai_assistant/lib/agent-registry', () => ({
-  getAgent: jest.fn(() => undefined),
-}))
-import { ensureAgentsLoaded, getAgentEntry } from '@open-mercato/enterprise/modules/agent_orchestrator/lib/sdk/defineAgent'
-import { PDF_TEXT_READER_AGENT_ID } from '../ai-agents'
-import '../ai-agents'
-import { PDF_TOOL_ID } from '../ai-tools'
+import { describe, expect, it } from '@jest/globals'
 
 const execFileAsync = promisify(execFile)
-describe('property_documents.pdf_text_reader', () => {
-  it('keeps file-plane options after generated file-agent loading', async () => {
-    await ensureAgentsLoaded()
-    expect(getAgentEntry(PDF_TEXT_READER_AGENT_ID)?.files).toEqual({
-      enabled: true,
-      inputs: true,
-      outputs: false,
-      bash: false,
-    })
-  })
-
-  it('registers a read-only file-plane research agent', () => {
-    const entry = getAgentEntry(PDF_TEXT_READER_AGENT_ID)
-    expect(entry).toMatchObject({
-      id: PDF_TEXT_READER_AGENT_ID,
-      moduleId: 'property_documents',
-      runtime: 'opencode',
-      resultKind: 'research',
-      files: { enabled: true, inputs: true, outputs: false, bash: false },
-    })
-    expect(entry?.tools).toEqual([PDF_TOOL_ID])
-    expect(entry?.outcomeSchema).toBeDefined()
-    expect(entry?.tokenUsage?.total).toBeGreaterThan(0)
-    expect(entry?.sourceFiles?.map((file) => file.path)).toEqual(
-      expect.arrayContaining(['AGENT.md', 'OUTCOME.md', 'SAMPLE.json']),
-    )
-  })
-
-  it('accepts exactly the brief payload and rejects extra fields', () => {
-    const entry = getAgentEntry(PDF_TEXT_READER_AGENT_ID)
-    expect(entry?.schema.safeParse({ kind: 'research', data: { brief: 'tekst PDF' } }).success).toBe(true)
-    expect(entry?.schema.safeParse({ kind: 'research', data: { brief: 'tekst PDF', extra: true } }).success).toBe(false)
-    expect(entry?.schema.safeParse({ kind: 'research', data: {} }).success).toBe(false)
-  })
+describe('property document agent profile hardening', () => {
   it('hardens property document profiles to their scoped read-only roots', async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), 'property-pdf-policy-'))
     const agentsDir = path.join(cwd, 'docker', 'opencode', 'agents')
@@ -100,7 +59,6 @@ Your result MUST match this JSON Schema (the \`data\` object). Pass it as the \`
         path.join(agentsDir, 'property_documents_pdf_intake.md'),
         generatedIntakeProfile,
       ),
-      writeFile(path.join(agentsDir, 'property_documents_pdf_text_reader.md'), generatedProfile),
       writeFile(
         path.join(agentsDir, 'property_documents_room_dimensions.md'),
         generatedRoomProfile,
@@ -140,20 +98,6 @@ Your result MUST match this JSON Schema (the \`data\` object). Pass it as the \`
       env: { ...process.env, OM_OPENCODE_WORKSPACE_ROOT_CONTAINER: '/home/opencode/work' },
     })
 
-    const hardened = await readFile(
-      path.join(agentsDir, 'property_documents_pdf_text_reader.md'),
-      'utf8',
-    )
-    expect(hardened).toContain('  read: true')
-    expect(hardened).toContain('  write: deny')
-    expect(hardened).toContain('  edit: deny')
-    expect(hardened).toContain('  bash: deny')
-    expect(hardened).toContain('    "/home/opencode/work/*/analysis/**": allow')
-    expect(hardened).toContain('    "home/opencode/work/*/analysis/**": allow')
-    expect(hardened).not.toContain('  write: true')
-    expect(hardened).not.toContain('  edit: true')
-    expect(hardened).not.toContain('open-mercato_agent_orchestrator_load_skill')
-    expect(hardened).not.toContain('open-mercato_agent_orchestrator_run_skill_script')
     const hardenedRoomDimensions = await readFile(
       path.join(agentsDir, 'property_documents_room_dimensions.md'),
       'utf8',
@@ -172,6 +116,14 @@ Your result MUST match this JSON Schema (the \`data\` object). Pass it as the \`
       path.join(agentsDir, 'property_documents_pdf_intake.md'),
       'utf8',
     )
+    expect(hardenedIntake).toContain('  read: true')
+    expect(hardenedIntake).toContain('  write: deny')
+    expect(hardenedIntake).toContain('  edit: deny')
+    expect(hardenedIntake).toContain('  bash: deny')
+    expect(hardenedIntake).toContain('    "/home/opencode/work/*/analysis/**": allow')
+    expect(hardenedIntake).toContain('    "home/opencode/work/*/analysis/**": allow')
+    expect(hardenedIntake).not.toContain('open-mercato_agent_orchestrator_load_skill')
+    expect(hardenedIntake).not.toContain('open-mercato_agent_orchestrator_run_skill_script')
     expect(hardenedIntake).toContain('"kind": "artifact"')
     expect(hardenedIntake).toContain('"path": "brief.json"')
     expect(hardenedIntake).not.toContain('"fileName": "report.pdf"')

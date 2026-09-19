@@ -21,7 +21,6 @@ import type {
 } from '@open-mercato/ai-assistant/modules/ai_assistant/lib/types'
 
 export const PDF_AGENT_ID = 'property_documents.pdf_intake'
-export const PDF_TEXT_READER_AGENT_ID = 'property_documents.pdf_text_reader'
 export const PDF_TOOL_ID = 'property_documents.process_pdf'
 export const ROOM_DIMENSIONS_AGENT_ID = 'property_documents.room_dimensions'
 export const ROOM_DIMENSIONS_TOOL_ID = 'property_documents.extract_room_dimensions'
@@ -503,9 +502,7 @@ async function requireActiveWorkspace(
     store.resolveActiveRunId(token),
   ])
   if (!runId) throw new Error('[internal] PDF tool has no active run')
-  const canInspect =
-    operation === 'inspect' &&
-    (agentId === PDF_AGENT_ID || agentId === PDF_TEXT_READER_AGENT_ID)
+  const canInspect = operation === 'inspect' && agentId === PDF_AGENT_ID
   if (!canInspect && !(operation === 'finalize' && agentId === PDF_AGENT_ID)) {
     throw new Error('[internal] PDF tool active agent mismatch')
   }
