@@ -137,7 +137,7 @@ describe('rfq_intake inbox action registry', () => {
 })
 
 describe('rfq_intake analysis workflow', () => {
-  it('runs catalog matching before page measurements after PDF intake', async () => {
+  it('runs catalog matching after page measurements', async () => {
     const { workflowsConfig } = await import('../workflows')
     const workflow = workflowsConfig.workflows.find((entry) => entry.workflowId === 'rfq_intake.analysis')
     expect(workflow).toBeDefined()
@@ -166,17 +166,6 @@ describe('rfq_intake analysis workflow', () => {
     })
     expect(activities[1]).toMatchObject({
       config: {
-        commandId: 'rfq_intake.requirements.match',
-        input: {
-          tenantId: '{{workflow.tenantId}}',
-          organizationId: '{{workflow.organizationId}}',
-          workflowInstanceId: '{{workflow.instanceId}}',
-          stepId: 'match_catalog',
-        },
-      },
-    })
-    expect(activities[2]).toMatchObject({
-      config: {
         commandId: 'rfq_intake.measure-rooms',
         input: {
           tenantId: '{{workflow.tenantId}}',
@@ -187,11 +176,22 @@ describe('rfq_intake analysis workflow', () => {
         },
       },
     })
+    expect(activities[2]).toMatchObject({
+      config: {
+        commandId: 'rfq_intake.requirements.match',
+        input: {
+          tenantId: '{{workflow.tenantId}}',
+          organizationId: '{{workflow.organizationId}}',
+          workflowInstanceId: '{{workflow.instanceId}}',
+          stepId: 'match_catalog',
+        },
+      },
+    })
     expect(definition.transitions).toEqual([
       { transitionId: 't_start', transitionName: 'Start', fromStepId: 'start', toStepId: 'extract_pdf', trigger: 'auto' },
-      { transitionId: 't_match', transitionName: 'Match', fromStepId: 'extract_pdf', toStepId: 'match_catalog', trigger: 'auto' },
-      { transitionId: 't_measure', transitionName: 'Measure', fromStepId: 'match_catalog', toStepId: 'measure_rooms', trigger: 'auto' },
-      { transitionId: 't_done', transitionName: 'Done', fromStepId: 'measure_rooms', toStepId: 'end', trigger: 'auto' },
+      { transitionId: 't_measure', transitionName: 'Measure', fromStepId: 'extract_pdf', toStepId: 'measure_rooms', trigger: 'auto' },
+      { transitionId: 't_match', transitionName: 'Match', fromStepId: 'measure_rooms', toStepId: 'match_catalog', trigger: 'auto' },
+      { transitionId: 't_done', transitionName: 'Done', fromStepId: 'match_catalog', toStepId: 'end', trigger: 'auto' },
     ])
     expect(definition.triggers ?? []).toEqual([])
   })

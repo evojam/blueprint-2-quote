@@ -2,7 +2,12 @@
 title: "Carry file-agent options through runtime and policy generation"
 modules: ["agent_orchestrator", "property_documents"]
 areas: ["ai-workflow", "framework-context"]
-topics: ["file-agents", "artifacts", "attachments", "workflows", "litellm", "tool-calls"]
+14: - [Carry file-agent options through runtime and policy generation](lessons/file-agent-options-need-runtime-and-policy.md) — area:ai-workflow,framework-context; module:agent_orchestrator,property_documents; topic:file-agents,artifacts,attachments,workflows,litellm,tool-calls,structured-output,outcome-projection
+
+### umes
+
+- [Overriding an inbox action buys the execution schema, not the edit schema](lessons/inbox-action-override-owns-only-execution-schema.md) — area:umes,module-data,framework-context; module:inbox_ops,rfq_intake,sales; topic:inbox-actions,validation,action-overrides,two-sources-of-truth
+15: topics: ["file-agents", "artifacts", "attachments", "workflows", "litellm", "tool-calls", "structured-output", "outcome-projection"]
 ---
 
 # Carry file-agent options through runtime and policy generation
@@ -40,4 +45,8 @@ topics: ["file-agents", "artifacts", "attachments", "workflows", "litellm", "too
 **Rebase-before-orchestration addendum**: Before designing a new Process Definition, workflow ID, or custom execution bridge around file agents, rebase onto the current base and inspect the app-owned workflow registry. If a code workflow already owns the trigger and earlier agent stages, extend that stable graph and its workflow-safe command convention instead of introducing a parallel orchestrator. Also check whether a database-backed definition shadows the code workflow; stop and reconcile it rather than shipping code steps that the runtime will ignore.
 
 **Process-projection addendum**: An Agent Orchestrator `ProcessDefinition` that points at a code workflow is a discoverability/manual-start projection, not a Workflows `workflow_definitions` override. Reuse the scoped projection when extending its workflow, keep its repo-owned description and triggers accurate, and preserve operator-owned milestones/UI metadata. Existing organizations are not automatically reseeded: inspect Studio edits before an explicit forced reconciliation. Continue to check core Workflow definitions separately because only they can shadow the code graph.
+
+**Workflow result projection addendum**: Awaiting a successful downstream agent run proves completion but does not project its typed outcome into the parent workflow activity result. A fan-out command must validate each returned envelope and explicitly accumulate the caller-facing data alongside its source identifier; counts alone discard valid outputs and make semantic statuses such as `unreadable` indistinguishable from missing data. Keep transport failures separate from successful domain results whose status says no usable measurement was extracted.
+
+**Anthropic structured-output addendum**: Anthropic rejects schemas with more than 16 array/union parameters before examining image content, and rejects open-ended object schemas whose `additionalProperties` is not `false`. A strict domain schema can therefore fail every vision run even when staging is correct. Use the AI SDK's schema-free JSON output mode, include the full candidate JSON Schema as untrusted generation guidance, then strict-validate the returned object server-side before semantic finalization. Pin schema-free mode in a regression test and bind accepted output back to server-observed image dimensions so an agent cannot turn a tool failure into a fabricated `unreadable` success.
 **Applies to**: Agent Orchestrator file agents, `.mercato/generated/file-agents.generated.ts`, `docker/opencode/agents/*.md`, and app-owned generation scripts.

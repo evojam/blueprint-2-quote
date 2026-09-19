@@ -3,8 +3,7 @@ import { registerWorkflowSafeCommands } from '@open-mercato/core/modules/workflo
 import { PDF_AGENT_ID } from '@/modules/property_documents/ai-tools'
 
 /**
- * The workflow may only call commands declared workflow-safe. The matcher remains
- * opt-in for each tenant through workflow-command settings.
+ * The workflow may only call commands declared workflow-safe.
  */
 registerWorkflowSafeCommands([
   {
@@ -50,7 +49,7 @@ export const RFQ_ANALYSIS_WORKFLOW_ID = 'rfq_intake.analysis'
 const rfqAnalysis = defineWorkflow({
   workflowId: RFQ_ANALYSIS_WORKFLOW_ID,
   workflowName: 'RFQ document analysis',
-  description: 'Reads the RFQ PDF and matches its brief against the catalog.',
+  description: 'Reads the RFQ PDF, extracts room measurements, and matches the brief against the catalog.',
   metadata: { category: 'RFQ', tags: ['rfq', 'agents', 'property'], icon: 'file-search' },
   steps: [
     { stepId: 'start', stepName: 'Start', stepType: 'START', description: 'RFQ case opened from the inbox' },
@@ -80,28 +79,6 @@ const rfqAnalysis = defineWorkflow({
       ],
     },
     {
-      stepId: 'match_catalog',
-      stepName: 'Match the brief to the catalog',
-      stepType: 'AUTOMATED',
-      description: 'Runs grouped catalog matching over the extracted brief.',
-      activities: [
-        {
-          activityId: 'match_requirements',
-          activityName: 'Match requirements',
-          activityType: 'UPDATE_ENTITY',
-          config: {
-            commandId: 'rfq_intake.requirements.match',
-            input: {
-              tenantId: '{{workflow.tenantId}}',
-              organizationId: '{{workflow.organizationId}}',
-              workflowInstanceId: '{{workflow.instanceId}}',
-              stepId: 'match_catalog',
-            },
-          },
-        },
-      ],
-    },
-    {
       stepId: 'measure_rooms',
       stepName: 'Measure rendered PDF pages',
       stepType: 'AUTOMATED',
@@ -124,13 +101,35 @@ const rfqAnalysis = defineWorkflow({
         },
       ],
     },
+    {
+      stepId: 'match_catalog',
+      stepName: 'Match the brief to the catalog',
+      stepType: 'AUTOMATED',
+      description: 'Runs grouped catalog matching after room measurements finish.',
+      activities: [
+        {
+          activityId: 'match_requirements',
+          activityName: 'Match requirements',
+          activityType: 'UPDATE_ENTITY',
+          config: {
+            commandId: 'rfq_intake.requirements.match',
+            input: {
+              tenantId: '{{workflow.tenantId}}',
+              organizationId: '{{workflow.organizationId}}',
+              workflowInstanceId: '{{workflow.instanceId}}',
+              stepId: 'match_catalog',
+            },
+          },
+        },
+      ],
+    },
     { stepId: 'end', stepName: 'Done', stepType: 'END' },
   ],
   transitions: [
     { transitionId: 't_start', transitionName: 'Start', fromStepId: 'start', toStepId: 'extract_pdf', trigger: 'auto' },
-    { transitionId: 't_match', transitionName: 'Match', fromStepId: 'extract_pdf', toStepId: 'match_catalog', trigger: 'auto' },
-    { transitionId: 't_measure', transitionName: 'Measure', fromStepId: 'match_catalog', toStepId: 'measure_rooms', trigger: 'auto' },
-    { transitionId: 't_done', transitionName: 'Done', fromStepId: 'measure_rooms', toStepId: 'end', trigger: 'auto' },
+    { transitionId: 't_measure', transitionName: 'Measure', fromStepId: 'extract_pdf', toStepId: 'measure_rooms', trigger: 'auto' },
+    { transitionId: 't_match', transitionName: 'Match', fromStepId: 'measure_rooms', toStepId: 'match_catalog', trigger: 'auto' },
+    { transitionId: 't_done', transitionName: 'Done', fromStepId: 'match_catalog', toStepId: 'end', trigger: 'auto' },
   ],
 })
 

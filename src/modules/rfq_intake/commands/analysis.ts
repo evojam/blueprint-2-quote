@@ -14,6 +14,10 @@ import {
   parseCatalogMatcherGroupedResult,
 } from '@/modules/property_documents/ai-agents'
 import { PDF_AGENT_ID, ROOM_MEASUREMENTS_AGENT_ID } from '@/modules/property_documents/ai-tools'
+import {
+  roomMeasurementSetSchema,
+  type RoomMeasurementSet,
+} from '@/modules/property_documents/room-measurements-contract'
 import { runCommand } from '../lib/commandBus'
 
 const BRIEF_FILE = 'brief.json'
@@ -54,6 +58,7 @@ export type RoomMeasurementFanoutResult = {
   totalPages: number
   succeeded: number
   failed: Array<{ fileName: string; reason: string }>
+  measurements: Array<{ fileName: string; data: RoomMeasurementSet }>
 }
 type WorkflowCommandInput = AnalysisInput | MeasureRoomsInput
 type GroupedMatcherResult = z.infer<typeof catalogMatcherGroupedResultSchema>
@@ -105,6 +110,12 @@ const pageInventorySchema = z
       context.addIssue({ code: z.ZodIssueCode.custom, message: 'page files must be unique' })
     }
   })
+const roomMeasurementAgentResultSchema = z
+  .object({
+    kind: z.literal('research'),
+    data: roomMeasurementSetSchema,
+  })
+  .strict()
 
 function failIntake(reason: string): never {
   throw new Error(`[internal] PDF intake ${reason.slice(0, 180)}`)
@@ -216,10 +227,6 @@ export async function loadPdfIntakeBrief(
   }
   if (briefArtifact.mimeType !== 'application/json') failIntake('invalid artifact metadata')
 
-  const briefReference = parsedResult.data.artifacts[0]
-  if (briefReference.artifactId != null && briefReference.artifactId !== briefArtifact.id) {
-    failIntake('invalid AgentResult')
-  }
 
   const briefBytes = await readVerifiedArtifact(ctx, scope, briefArtifact)
   const { brief } = parseJsonArtifact(briefBytes, briefSchema, BRIEF_FILE)
@@ -230,6 +237,23 @@ export async function loadPdfIntakeBrief(
 type PdfIntakePage = {
   id: string
   fileName: string
+  imageWidthPx: number
+  imageHeightPx: number
+}
+
+function readPngDimensions(bytes: Buffer): { imageWidthPx: number; imageHeightPx: number } {
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  if (
+    bytes.length < 24 ||
+    !bytes.subarray(0, signature.length).equals(signature) ||
+    bytes.toString('ascii', 12, 16) !== 'IHDR'
+  ) {
+    failIntake('invalid rendered page artifact')
+  }
+  const imageWidthPx = bytes.readUInt32BE(16)
+  const imageHeightPx = bytes.readUInt32BE(20)
+  if (imageWidthPx < 1 || imageHeightPx < 1) failIntake('invalid rendered page artifact')
+  return { imageWidthPx, imageHeightPx }
 }
 
 async function loadPdfIntakePages(
@@ -308,11 +332,13 @@ async function loadPdfIntakePages(
     }
     artifactsByFileName.set(artifact.fileName, artifact)
   }
-  const pages = inventory.files.map((fileName) => {
+  const pages: PdfIntakePage[] = []
+  for (const fileName of inventory.files) {
     const artifact = artifactsByFileName.get(fileName)
     if (!artifact) failIntake('invalid rendered page artifact')
-    return { id: artifact.id, fileName }
-  })
+    const dimensions = readPngDimensions(await readVerifiedArtifact(ctx, scope, artifact))
+    pages.push({ id: artifact.id, fileName, ...dimensions })
+  }
   return { runId: run.id, pages }
 }
 
@@ -408,6 +434,7 @@ const measureRoomsCommand: CommandHandler<MeasureRoomsInput, RoomMeasurementFano
     const { runId, pages } = await loadPdfIntakePages(em, ctx, input)
     const agentRuntime = ctx.container.resolve('agentRuntime') as AgentRuntime
     const failed: Array<{ fileName: string; reason: string }> = []
+    const measurements: RoomMeasurementFanoutResult['measurements'] = []
     for (const page of pages) {
       try {
         const { attachmentId } = await runCommand<
@@ -428,7 +455,7 @@ const measureRoomsCommand: CommandHandler<MeasureRoomsInput, RoomMeasurementFano
           recordId: input.dealId,
           fileName: page.fileName,
         })
-        await agentRuntime.run(
+        const result = await agentRuntime.run(
           ROOM_MEASUREMENTS_AGENT_ID,
           {
             __files: {
@@ -444,6 +471,15 @@ const measureRoomsCommand: CommandHandler<MeasureRoomsInput, RoomMeasurementFano
             invocationId: `room-measurement:${page.id}`,
           },
         )
+        const parsedResult = roomMeasurementAgentResultSchema.safeParse(result)
+        if (!parsedResult.success) throw new Error('[internal] invalid room measurement result')
+        if (
+          parsedResult.data.data.drawing.imageWidthPx !== page.imageWidthPx ||
+          parsedResult.data.data.drawing.imageHeightPx !== page.imageHeightPx
+        ) {
+          throw new Error('[internal] room measurement dimensions mismatch')
+        }
+        measurements.push({ fileName: page.fileName, data: parsedResult.data.data })
       } catch (error) {
         failed.push({
           fileName: page.fileName,
@@ -456,6 +492,7 @@ const measureRoomsCommand: CommandHandler<MeasureRoomsInput, RoomMeasurementFano
       totalPages: pages.length,
       succeeded: pages.length - failed.length,
       failed,
+      measurements,
     }
   },
 }

@@ -142,6 +142,7 @@ function invalidCandidate(): RoomMeasurementCandidate {
   return candidate
 }
 
+
 function visionRequest() {
   return { dataUrl: DATA_URL, ...IMAGE, context }
 }
@@ -149,7 +150,8 @@ function visionRequest() {
 function generationCalls() {
   return mockGenerateObject.mock.calls.map(([input]) => input as {
     model: unknown
-    schema: unknown
+    output?: string
+    schema?: unknown
     messages: Array<{
       role: string
       content: Array<{ type: string; text?: string; image?: string }>
@@ -269,7 +271,8 @@ describe('room measurements vision service', () => {
     expect(result.drawing).toMatchObject(IMAGE)
     expect(mockGenerateObject).toHaveBeenCalledTimes(1)
     const [call] = generationCalls()
-    expect(call.schema).toBe(roomMeasurementCandidateSchema)
+    expect(call.output).toBe('no-schema')
+    expect(call.schema).toBeUndefined()
     expect(call.messages[0].content).toEqual(
       expect.arrayContaining([{ type: 'image', image: DATA_URL }]),
     )
@@ -303,7 +306,8 @@ describe('room measurements vision service', () => {
     expect(mockGenerateObject).toHaveBeenCalledTimes(2)
     const [first, second] = generationCalls()
     for (const call of [first, second]) {
-      expect(call.schema).toBe(roomMeasurementCandidateSchema)
+      expect(call.output).toBe('no-schema')
+      expect(call.schema).toBeUndefined()
       expect(call.messages[0].content).toEqual(
         expect.arrayContaining([{ type: 'image', image: DATA_URL }]),
       )

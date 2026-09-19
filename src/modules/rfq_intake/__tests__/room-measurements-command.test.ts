@@ -67,9 +67,43 @@ type PromotionCall = {
 function sha256(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex')
 }
+function pngBytes(width: number, height: number): Buffer {
+  const bytes = Buffer.alloc(24)
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes)
+  bytes.write('IHDR', 12, 'ascii')
+  bytes.writeUInt32BE(width, 16)
+  bytes.writeUInt32BE(height, 20)
+  return bytes
+}
+
+function artifactBytes(fileName: string, mimeType: string): Buffer {
+  const page = /^pdf-page-(\d{4})\.png$/.exec(fileName)
+  return page && mimeType === 'image/png'
+    ? pngBytes(100 + Number(page[1]), 100)
+    : Buffer.from(fileName)
+}
+
+function measurement(imageWidthPx: number) {
+  return {
+    schemaVersion: '1' as const,
+    analysisStatus: 'not_floor_plan' as const,
+    drawing: {
+      imageWidthPx,
+      imageHeightPx: 100,
+      declaredUnit: null,
+      declaredScale: null,
+      calibrations: [],
+      globalCeilingHeight: null,
+      confidence: 0.9,
+      warnings: [],
+    },
+    rooms: [],
+    warnings: [],
+  }
+}
 
 function artifact(fileName: string, mimeType = 'image/png'): Artifact {
-  const bytes = Buffer.from(fileName)
+  const bytes = artifactBytes(fileName, mimeType)
   return {
     id: `artifact-${fileName}`,
     tenantId: INPUT.tenantId,
@@ -179,9 +213,11 @@ function buildHarness(overrides: { artifacts?: Artifact[]; inventory?: unknown }
     },
     find: async () => artifacts,
   }
-  getArtifactBytes.mockImplementation(async (_container, _scope, storageKey) =>
-    storageKey === inventoryArtifact.storageKey ? inventoryBytes : null,
-  )
+  getArtifactBytes.mockImplementation(async (_container, _scope, storageKey) => {
+    if (storageKey === inventoryArtifact.storageKey) return inventoryBytes
+    const storedArtifact = artifacts.find((candidate) => candidate.storageKey === storageKey)
+    return storedArtifact ? artifactBytes(storedArtifact.fileName, storedArtifact.mimeType) : null
+  })
   const ctx = {
     auth: { sub: 'user-1', tenantId: INPUT.tenantId, orgId: INPUT.organizationId },
     selectedOrganizationId: INPUT.organizationId,
@@ -239,22 +275,36 @@ describe('measureRoomsCommand', () => {
       }),
     )
 
-    harness.waits.get('room-measurement:artifact-pdf-page-0001.png')!.resolve({ kind: 'research', data: {} })
+    harness.waits.get('room-measurement:artifact-pdf-page-0001.png')!.resolve({
+      kind: 'research',
+      data: measurement(101),
+    })
     await nextTurn()
     expect(harness.promotionCalls).toHaveLength(2)
     expect(harness.agentRuntime.run).toHaveBeenCalledTimes(2)
 
-    harness.waits.get('room-measurement:artifact-pdf-page-0002.png')!.resolve({ kind: 'research', data: {} })
+    harness.waits.get('room-measurement:artifact-pdf-page-0002.png')!.resolve({
+      kind: 'research',
+      data: measurement(102),
+    })
     await nextTurn()
     expect(harness.promotionCalls).toHaveLength(3)
     expect(harness.agentRuntime.run).toHaveBeenCalledTimes(3)
 
-    harness.waits.get('room-measurement:artifact-pdf-page-0003.png')!.resolve({ kind: 'research', data: {} })
+    harness.waits.get('room-measurement:artifact-pdf-page-0003.png')!.resolve({
+      kind: 'research',
+      data: measurement(103),
+    })
     await expect(pending).resolves.toEqual({
       intakeRunId: RUN_ID,
       totalPages: 3,
       succeeded: 3,
       failed: [],
+      measurements: [
+        { fileName: 'pdf-page-0001.png', data: measurement(101) },
+        { fileName: 'pdf-page-0002.png', data: measurement(102) },
+        { fileName: 'pdf-page-0003.png', data: measurement(103) },
+      ],
     })
   })
 
@@ -263,18 +313,51 @@ describe('measureRoomsCommand', () => {
     const pending = measureRoomsCommand.execute(INPUT, harness.ctx)
 
     await nextTurn()
-    harness.waits.get('room-measurement:artifact-pdf-page-0001.png')!.resolve({ kind: 'research', data: {} })
+    harness.waits.get('room-measurement:artifact-pdf-page-0001.png')!.resolve({
+      kind: 'research',
+      data: measurement(101),
+    })
     await nextTurn()
     harness.waits.get('room-measurement:artifact-pdf-page-0002.png')!.reject(new Error('provider unavailable'))
     await nextTurn()
     expect(harness.agentRuntime.run).toHaveBeenCalledTimes(3)
-    harness.waits.get('room-measurement:artifact-pdf-page-0003.png')!.resolve({ kind: 'research', data: {} })
+    harness.waits.get('room-measurement:artifact-pdf-page-0003.png')!.resolve({
+      kind: 'research',
+      data: measurement(103),
+    })
 
     await expect(pending).resolves.toEqual({
       intakeRunId: RUN_ID,
       totalPages: 3,
       succeeded: 2,
       failed: [{ fileName: 'pdf-page-0002.png', reason: 'provider unavailable' }],
+      measurements: [
+        { fileName: 'pdf-page-0001.png', data: measurement(101) },
+        { fileName: 'pdf-page-0003.png', data: measurement(103) },
+      ],
+    })
+  })
+
+  it('rejects a fabricated unreadable result whose dimensions do not match the staged page', async () => {
+    const fileName = 'pdf-page-0001.png'
+    const harness = buildHarness({
+      artifacts: [artifact(fileName)],
+      inventory: { pageCount: 1, files: [fileName] },
+    })
+    const pending = measureRoomsCommand.execute(INPUT, harness.ctx)
+
+    await nextTurn()
+    harness.waits.get('room-measurement:artifact-pdf-page-0001.png')!.resolve({
+      kind: 'research',
+      data: measurement(1),
+    })
+
+    await expect(pending).resolves.toEqual({
+      intakeRunId: RUN_ID,
+      totalPages: 1,
+      succeeded: 0,
+      failed: [{ fileName, reason: '[internal] room measurement dimensions mismatch' }],
+      measurements: [],
     })
   })
 
