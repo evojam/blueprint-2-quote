@@ -1,4 +1,9 @@
-import { describe, expect, it } from '@jest/globals'
+import { describe, expect, it, jest } from '@jest/globals'
+
+jest.mock('../room-dimensions-vision', () => ({
+  roomDimensionsVisionService: { analyzeImage: jest.fn() },
+}))
+
 import '../../../modules'
 import '../di'
 import { ensureAgentsLoaded, getAgentEntry } from '@open-mercato/enterprise/modules/agent_orchestrator/lib/sdk/defineAgent'
