@@ -13,6 +13,25 @@ FROM ${OPENCODE_BASE_IMAGE}
 # The base image already installed OpenCode, created the non-root `opencode`
 # user + /home/opencode/.config/opencode, and set WORKDIR. Re-assert them so
 # this Dockerfile is readable on its own and safe if the base ever changes.
+#
+# Renumber `opencode` (uid/gid 1000 in the base image) onto the app image's
+# `omuser` (uid/gid 1001, main `Dockerfile`). The `opencode_work` volume is
+# mounted at /home/opencode/work in `app`, `mcp` AND `opencode`; with two
+# different uids on it, whichever container writes first locks the other out.
+# Override both args together if the app's uid ever moves.
+#
+# `work/` is created here on purpose: a named/task volume inherits its owner
+# from the image directory it is first mounted over, and the base image has no
+# such directory — so a fresh volume came up root-owned 0755 and nobody but
+# root could write it. Seeded 1001:1001, opencode and the app agree on it.
+ARG OPENCODE_UID=1001
+ARG OPENCODE_GID=1001
+USER root
+RUN groupmod -g "${OPENCODE_GID}" opencode \
+ && usermod -u "${OPENCODE_UID}" -g "${OPENCODE_GID}" opencode \
+ && chown -R "${OPENCODE_UID}:${OPENCODE_GID}" /home/opencode \
+ && install -d -o "${OPENCODE_UID}" -g "${OPENCODE_GID}" /home/opencode/work
+
 USER opencode
 WORKDIR /home/opencode
 
