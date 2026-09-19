@@ -96,7 +96,6 @@ const rfqAnalysis = defineWorkflow({
           activityId: 'match_requirements',
           activityName: 'Match requirements',
           activityType: 'UPDATE_ENTITY',
-          async: true,
           config: {
             commandId: 'rfq_intake.requirements.match',
             input: {
@@ -119,7 +118,6 @@ const rfqAnalysis = defineWorkflow({
           activityId: 'measure_rendered_pages',
           activityName: 'Measure rendered pages',
           activityType: 'UPDATE_ENTITY',
-          async: true,
           config: {
             commandId: 'rfq_intake.measure-rooms',
             input: {

@@ -137,7 +137,7 @@ describe('rfq_intake inbox action registry', () => {
 })
 
 describe('rfq_intake analysis workflow', () => {
-  it('forks catalog matching and page measurements after PDF intake, then waits for both', async () => {
+  it('forks catalog matching and page measurements after PDF intake, then waits for both branch activities', async () => {
     const { workflowsConfig } = await import('../workflows')
     const workflow = workflowsConfig.workflows.find((entry) => entry.workflowId === 'rfq_intake.analysis')
     expect(workflow).toBeDefined()
@@ -177,6 +177,7 @@ describe('rfq_intake analysis workflow', () => {
       'UPDATE_ENTITY',
       'UPDATE_ENTITY',
     ])
+    expect(activities.every((activity) => activity.async !== true)).toBe(true)
     expect(activities[0]!.config).toMatchObject({
       agentId: 'property_documents.pdf_intake',
       input: {
@@ -184,9 +185,7 @@ describe('rfq_intake analysis workflow', () => {
       },
     })
     expect(activities[1]).toMatchObject({
-      async: true,
       config: {
-        commandId: 'rfq_intake.requirements.match',
         input: {
           tenantId: '{{workflow.tenantId}}',
           organizationId: '{{workflow.organizationId}}',
@@ -196,7 +195,6 @@ describe('rfq_intake analysis workflow', () => {
       },
     })
     expect(activities[2]).toMatchObject({
-      async: true,
       config: {
         commandId: 'rfq_intake.measure-rooms',
         input: {
