@@ -125,7 +125,9 @@ Your result MUST match this JSON Schema (the \`data\` object). Pass it as the \`
     expect(hardenedIntake).not.toContain('open-mercato_agent_orchestrator_load_skill')
     expect(hardenedIntake).not.toContain('open-mercato_agent_orchestrator_run_skill_script')
     expect(hardenedIntake).toContain('"kind": "artifact"')
-    expect(hardenedIntake).toContain('"path": "brief.json"')
+    expect(hardenedIntake).toContain('"fileName": "brief.json"')
+    expect(hardenedIntake).toContain('"fileName": "pdf-pages.json"')
+    expect(hardenedIntake).not.toContain('"path":')
     expect(hardenedIntake).not.toContain('"fileName": "report.pdf"')
     for (const bundlePath of bundlePaths) {
       await expect(access(bundlePath)).rejects.toMatchObject({ code: 'ENOENT' })

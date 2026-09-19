@@ -5,10 +5,15 @@ tools:
   "*": false
   "open-mercato_property_documents_process_pdf": true
   "open-mercato_agent_orchestrator_submit_outcome": true
+  read: true
 permission:
   write: deny
   edit: deny
-  read: deny
+  read:
+    "*": deny
+    "/home/opencode/work/*/analysis/**": allow
+    "home/opencode/work/*/analysis/**": allow
+    "work/*/analysis/**": allow
   bash: deny
   task: deny
 ---
