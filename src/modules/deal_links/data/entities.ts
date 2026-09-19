@@ -1,4 +1,5 @@
 import { Entity, Index, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
+import { OptionalProps } from '@mikro-orm/core';
 
 /**
  * A deal and the sales document produced for it.
@@ -17,6 +18,8 @@ import { Entity, Index, PrimaryKey, Property } from '@mikro-orm/decorators/legac
   properties: ['tenantId', 'organizationId', 'dealId', 'deletedAt'],
 })
 export class DealDocumentLink {
+  [OptionalProps]?: 'createdAt' | 'updatedAt'
+
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
 
