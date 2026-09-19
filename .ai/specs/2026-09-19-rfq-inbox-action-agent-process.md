@@ -133,7 +133,7 @@ e-mail (PDF)
            START
            -> INVOKE_AGENT  property_documents.pdf_intake -> brief.json, pdf-pages.json, N page PNGs
            -> AUTOMATED rfq_intake.requirements.match -> grouped catalog matcher
-           -> AUTOMATED rfq_intake.measure-rooms -> validate manifest; for EACH PNG:
+           -> AUTOMATED rfq_intake.measure-rooms -> validate manifest; sequentially for EACH PNG:
                 artifact.promote to CustomerDeal -> agentRuntime.run(room_measurements, one attachment)
            -> END
 ```
@@ -212,7 +212,7 @@ The prefix `rfq_intake.` is not in the event-trigger subscriber's excluded list 
 | TEST-014 | unit | Seeded funnel; then an unseeded organization | Execute `rfq_intake.deal.advance` | The stage resolves by position and `customers.deals.update` is called with it; unseeded is reported as `moved: false` with no deal write; an unknown stage key is rejected | REQ-007 |
 | TEST-015 | unit | The generated workflow registry | Read `rfq_intake.analysis` | The activity chain is `advance(quoting)` → `pdf_intake` → plans → requirements → `advance(review)` | REQ-007 |
 | TEST-005 | manual (demo) | Enterprise + agents flags on, seeded org, RFQ e-mail with PDF | Accept the action in the Inbox | The deal exists in the pipeline; `property_documents.pdf_intake` produces `brief.json`, `pdf-pages.json`, and one `room_measurements` run per rendered page | REQ-001, REQ-002, REQ-008 |
-| TEST-016 | unit | Successful scoped PDF run with `pdf-pages.json` listing three PNGs and matching artifacts | Execute `rfq_intake.measure-rooms` with deferred agent results | All three artifacts are promoted to the RFQ deal and all three single-attachment `room_measurements` runs start before any resolves; manifests/foreign/non-PNG artifacts are rejected before runtime handoff; one failed run does not suppress the others | REQ-002, REQ-008 |
+| TEST-016 | unit | Successful scoped PDF run with `pdf-pages.json` listing three PNGs and matching artifacts | Execute `rfq_intake.measure-rooms` with deferred agent results | Each artifact is promoted and its single-attachment `room_measurements` run finishes before the next page starts; manifests/foreign/non-PNG artifacts are rejected before runtime handoff; one failed run does not suppress later pages | REQ-002, REQ-008 |
 | TEST-017 | unit | Generated `rfq_intake.analysis` definition | Validate with `workflowDefinitionDataSchema` | PDF intake transitions to catalog matching, then page measurement fan-out, then end; no later stage starts before its predecessor completes | REQ-008 |
 
 TEST-005 is deliberately manual for this slice: an automated end-to-end run would need the OpenCode agent runtime in CI, which is its own piece of work. `HACK(hackathon)` noted at the seam.
@@ -319,7 +319,7 @@ Verdict: `Ready for implementation`.
 
 | ID | Question | Owner | Blocking? | Resolution / decision date |
 |---|---|---|---|---|
-| Q-001 | `pdf_intake` emits `brief.json`, `pdf-pages.json`, and one PNG per page, while `room_measurements` accepts exactly one staged image. Should RFQ fan out to one parallel `room_measurements` run per PNG (recommended), or should its public one-image contract be changed to accept all generated files in one run? | Product owner | yes | **Resolved 2026-10-11:** fan out to one run per PNG; preserve the strict V2 contract |
+| Q-001 | `pdf_intake` emits `brief.json`, `pdf-pages.json`, and one PNG per page, while `room_measurements` accepts exactly one staged image. Should RFQ run one `room_measurements` invocation per PNG, or should its public one-image contract be changed to accept all generated files in one run? | Product owner | yes | **Resolved 2026-10-11:** run one invocation per PNG sequentially; preserve the strict V2 contract |
 
 ## Changelog
 
@@ -329,3 +329,4 @@ Verdict: `Ready for implementation`.
 | 2026-10-11 | Added blocking design question for the parallel room-measurements RFQ stage. |
 | 2026-10-11 | Chose per-PNG room-measurement fan-out and specified the post-intake parallel fork/join. |
 | 2026-10-11 | Replaced the stalled post-agent fork/join with a sequential catalog-match then page-measurement pipeline; reported upstream as open-mercato/open-mercato#6280. |
+| 2026-10-11 | Serialized per-page room measurements: the OpenCode workspace already serializes execution, while concurrent session creation correlated with every page run losing MCP session authorization. |

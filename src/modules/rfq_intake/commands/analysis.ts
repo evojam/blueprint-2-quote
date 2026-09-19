@@ -407,8 +407,9 @@ const measureRoomsCommand: CommandHandler<MeasureRoomsInput, RoomMeasurementFano
     const em = (ctx.container.resolve('em') as EntityManager).fork()
     const { runId, pages } = await loadPdfIntakePages(em, ctx, input)
     const agentRuntime = ctx.container.resolve('agentRuntime') as AgentRuntime
-    const settled = await Promise.allSettled(
-      pages.map(async (page) => {
+    const failed: Array<{ fileName: string; reason: string }> = []
+    for (const page of pages) {
+      try {
         const { attachmentId } = await runCommand<
           {
             tenantId: string
@@ -443,18 +444,13 @@ const measureRoomsCommand: CommandHandler<MeasureRoomsInput, RoomMeasurementFano
             invocationId: `room-measurement:${page.id}`,
           },
         )
-      }),
-    )
-    const failed = settled.flatMap((result, index) =>
-      result.status === 'rejected'
-        ? [
-            {
-              fileName: pages[index]!.fileName,
-              reason: result.reason instanceof Error ? result.reason.message : 'room measurement run failed',
-            },
-          ]
-        : [],
-    )
+      } catch (error) {
+        failed.push({
+          fileName: page.fileName,
+          reason: error instanceof Error ? error.message : 'room measurement run failed',
+        })
+      }
+    }
     return {
       intakeRunId: runId,
       totalPages: pages.length,
