@@ -381,7 +381,7 @@ describe('room measurement PNG fixtures', () => {
         analyzeImage,
       })
 
-      const result = await tool.handler({}, context())
+      const result = roomMeasurementSetSchema.parse(await tool.handler({}, context()))
 
       expect(analyzeImage).toHaveBeenCalledTimes(1)
       expect(result.drawing).toMatchObject({

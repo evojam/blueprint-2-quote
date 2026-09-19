@@ -26,8 +26,8 @@ kind: research
         "warnings"
       ],
       "properties": {
-        "imageWidthPx": { "type": "integer", "exclusiveMinimum": 0 },
-        "imageHeightPx": { "type": "integer", "exclusiveMinimum": 0 },
+        "imageWidthPx": { "type": "integer" },
+        "imageHeightPx": { "type": "integer" },
         "declaredUnit": {
           "type": "object",
           "nullable": true,
@@ -35,7 +35,7 @@ kind: research
           "required": ["value", "sourceText", "evidence", "confidence"],
           "properties": {
             "value": { "type": "string", "enum": ["mm", "cm", "m", "in", "ft"] },
-            "sourceText": { "type": "string", "maxLength": 500 },
+            "sourceText": { "type": "string" },
             "evidence": {
               "type": "array",
               "items": {
@@ -45,8 +45,8 @@ kind: research
                 "properties": {
                   "x": { "type": "number", "minimum": 0, "maximum": 1 },
                   "y": { "type": "number", "minimum": 0, "maximum": 1 },
-                  "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
-                  "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+                  "width": { "type": "number", "maximum": 1 },
+                  "height": { "type": "number", "maximum": 1 }
                 }
               }
             },
@@ -59,7 +59,7 @@ kind: research
           "additionalProperties": false,
           "required": ["sourceText", "evidence", "confidence"],
           "properties": {
-            "sourceText": { "type": "string", "maxLength": 500 },
+            "sourceText": { "type": "string" },
             "evidence": {
               "type": "array",
               "items": {
@@ -69,8 +69,8 @@ kind: research
                 "properties": {
                   "x": { "type": "number", "minimum": 0, "maximum": 1 },
                   "y": { "type": "number", "minimum": 0, "maximum": 1 },
-                  "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
-                  "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+                  "width": { "type": "number", "maximum": 1 },
+                  "height": { "type": "number", "maximum": 1 }
                 }
               }
             },
@@ -79,7 +79,6 @@ kind: research
         },
         "calibrations": {
           "type": "array",
-          "maxItems": 20,
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -95,9 +94,9 @@ kind: research
               "calculationEligibility"
             ],
             "properties": {
-              "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "id": { "type": "string", "minLength": 1 },
               "kind": { "type": "string", "enum": ["scale_bar", "dimension_anchor"] },
-              "sourceText": { "type": "string", "maxLength": 500 },
+              "sourceText": { "type": "string" },
               "evidence": {
                 "type": "array",
                 "items": {
@@ -107,8 +106,8 @@ kind: research
                   "properties": {
                     "x": { "type": "number", "minimum": 0, "maximum": 1 },
                     "y": { "type": "number", "minimum": 0, "maximum": 1 },
-                    "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
-                    "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+                    "width": { "type": "number", "maximum": 1 },
+                    "height": { "type": "number", "maximum": 1 }
                   }
                 }
               },
@@ -146,12 +145,12 @@ kind: research
                   "calculationEligibility"
                 ],
                 "properties": {
-                  "id": { "type": "string", "minLength": 1, "maxLength": 128 },
-                  "value": { "type": "number", "exclusiveMinimum": 0 },
+                  "id": { "type": "string", "minLength": 1 },
+                  "value": { "type": "number" },
                   "unit": { "type": "string", "enum": ["mm", "cm", "m", "in", "ft"] },
                   "unitSource": { "type": "string", "enum": ["label", "drawing"] },
                   "method": { "type": "string", "enum": ["printed", "scale_derived"] },
-                  "sourceText": { "type": "string", "nullable": true, "maxLength": 500 },
+                  "sourceText": { "type": "string", "nullable": true },
                   "evidence": {
                     "type": "array",
                     "items": {
@@ -161,12 +160,12 @@ kind: research
                       "properties": {
                         "x": { "type": "number", "minimum": 0, "maximum": 1 },
                         "y": { "type": "number", "minimum": 0, "maximum": 1 },
-                        "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
-                        "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+                        "width": { "type": "number", "maximum": 1 },
+                        "height": { "type": "number", "maximum": 1 }
                       }
                     }
                   },
-                  "calibrationId": { "type": "string", "nullable": true, "minLength": 1, "maxLength": 128 },
+                  "calibrationId": { "type": "string", "nullable": true, "minLength": 1 },
                   "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
                   "calculationEligibility": { "type": "string", "enum": ["eligible", "review_required"] }
                 }
@@ -193,12 +192,12 @@ kind: research
             "calculationEligibility"
           ],
           "properties": {
-            "id": { "type": "string", "minLength": 1, "maxLength": 128 },
-            "value": { "type": "number", "exclusiveMinimum": 0 },
+            "id": { "type": "string", "minLength": 1 },
+            "value": { "type": "number" },
             "unit": { "type": "string", "enum": ["mm", "cm", "m", "in", "ft"] },
             "unitSource": { "type": "string", "enum": ["label", "drawing"] },
             "method": { "type": "string", "enum": ["printed", "scale_derived"] },
-            "sourceText": { "type": "string", "nullable": true, "maxLength": 500 },
+            "sourceText": { "type": "string", "nullable": true },
             "evidence": {
               "type": "array",
               "items": {
@@ -208,12 +207,12 @@ kind: research
                 "properties": {
                   "x": { "type": "number", "minimum": 0, "maximum": 1 },
                   "y": { "type": "number", "minimum": 0, "maximum": 1 },
-                  "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
-                  "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+                  "width": { "type": "number", "maximum": 1 },
+                  "height": { "type": "number", "maximum": 1 }
                 }
               }
             },
-            "calibrationId": { "type": "string", "nullable": true, "minLength": 1, "maxLength": 128 },
+            "calibrationId": { "type": "string", "nullable": true, "minLength": 1 },
             "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
             "calculationEligibility": { "type": "string", "enum": ["eligible", "review_required"] }
           }
@@ -221,14 +220,12 @@ kind: research
         "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
         "warnings": {
           "type": "array",
-          "maxItems": 100,
-          "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+          "items": { "type": "string", "minLength": 1 }
         }
       }
     },
     "rooms": {
       "type": "array",
-      "maxItems": 100,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -245,9 +242,9 @@ kind: research
           "missingInputs"
         ],
         "properties": {
-          "id": { "type": "string", "minLength": 1, "maxLength": 128 },
-          "printedName": { "type": "string", "nullable": true, "minLength": 1, "maxLength": 500 },
-          "location": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "id": { "type": "string", "minLength": 1 },
+          "printedName": { "type": "string", "nullable": true, "minLength": 1 },
+          "location": { "type": "string", "minLength": 1 },
           "floor": {
             "type": "object",
             "additionalProperties": false,
@@ -255,7 +252,6 @@ kind: research
             "properties": {
               "outerBoundary": {
                 "type": "array",
-                "maxItems": 128,
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
@@ -268,16 +264,14 @@ kind: research
               },
               "holes": {
                 "type": "array",
-                "maxItems": 32,
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
                   "required": ["id", "boundary"],
                   "properties": {
-                    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+                    "id": { "type": "string", "minLength": 1 },
                     "boundary": {
                       "type": "array",
-                      "maxItems": 128,
                       "items": {
                         "type": "object",
                         "additionalProperties": false,
@@ -308,13 +302,13 @@ kind: research
                   "calculationEligibility"
                 ],
                 "properties": {
-                  "id": { "type": "string", "minLength": 1, "maxLength": 128 },
-                  "value": { "type": "number", "exclusiveMinimum": 0 },
+                  "id": { "type": "string", "minLength": 1 },
+                  "value": { "type": "number" },
                   "unit": { "type": "string", "enum": ["mm2", "cm2", "m2", "in2", "ft2"] },
                   "unitSource": { "type": "string", "enum": ["label", "drawing"] },
                   "method": { "const": "printed" },
                   "basis": { "type": "string", "enum": ["gross", "net", "unknown"] },
-                  "sourceText": { "type": "string", "maxLength": 500 },
+                  "sourceText": { "type": "string" },
                   "evidence": {
                     "type": "array",
                     "items": {
@@ -324,8 +318,8 @@ kind: research
                       "properties": {
                         "x": { "type": "number", "minimum": 0, "maximum": 1 },
                         "y": { "type": "number", "minimum": 0, "maximum": 1 },
-                        "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
-                        "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+                        "width": { "type": "number", "maximum": 1 },
+                        "height": { "type": "number", "maximum": 1 }
                       }
                     }
                   },
@@ -338,7 +332,6 @@ kind: research
           },
           "walls": {
             "type": "array",
-            "maxItems": 128,
             "items": {
               "type": "object",
               "additionalProperties": false,
@@ -354,7 +347,7 @@ kind: research
                 "calculationEligibility"
               ],
               "properties": {
-                "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+                "id": { "type": "string", "minLength": 1 },
                 "start": {
                   "type": "object",
                   "additionalProperties": false,
@@ -390,12 +383,12 @@ kind: research
                     "calculationEligibility"
                   ],
                   "properties": {
-                    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
-                    "value": { "type": "number", "exclusiveMinimum": 0 },
+                    "id": { "type": "string", "minLength": 1 },
+                    "value": { "type": "number" },
                     "unit": { "type": "string", "enum": ["mm", "cm", "m", "in", "ft"] },
                     "unitSource": { "type": "string", "enum": ["label", "drawing"] },
                     "method": { "type": "string", "enum": ["printed", "scale_derived"] },
-                    "sourceText": { "type": "string", "nullable": true, "maxLength": 500 },
+                    "sourceText": { "type": "string", "nullable": true },
                     "evidence": {
                       "type": "array",
                       "items": {
@@ -405,12 +398,12 @@ kind: research
                         "properties": {
                           "x": { "type": "number", "minimum": 0, "maximum": 1 },
                           "y": { "type": "number", "minimum": 0, "maximum": 1 },
-                          "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
-                          "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+                          "width": { "type": "number", "maximum": 1 },
+                          "height": { "type": "number", "maximum": 1 }
                         }
                       }
                     },
-                    "calibrationId": { "type": "string", "nullable": true, "minLength": 1, "maxLength": 128 },
+                    "calibrationId": { "type": "string", "nullable": true, "minLength": 1 },
                     "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
                     "calculationEligibility": { "type": "string", "enum": ["eligible", "review_required"] }
                   }
@@ -433,12 +426,12 @@ kind: research
                     "calculationEligibility"
                   ],
                   "properties": {
-                    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
-                    "value": { "type": "number", "exclusiveMinimum": 0 },
+                    "id": { "type": "string", "minLength": 1 },
+                    "value": { "type": "number" },
                     "unit": { "type": "string", "enum": ["mm", "cm", "m", "in", "ft"] },
                     "unitSource": { "type": "string", "enum": ["label", "drawing"] },
                     "method": { "type": "string", "enum": ["printed", "scale_derived"] },
-                    "sourceText": { "type": "string", "nullable": true, "maxLength": 500 },
+                    "sourceText": { "type": "string", "nullable": true },
                     "evidence": {
                       "type": "array",
                       "items": {
@@ -448,12 +441,12 @@ kind: research
                         "properties": {
                           "x": { "type": "number", "minimum": 0, "maximum": 1 },
                           "y": { "type": "number", "minimum": 0, "maximum": 1 },
-                          "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
-                          "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+                          "width": { "type": "number", "maximum": 1 },
+                          "height": { "type": "number", "maximum": 1 }
                         }
                       }
                     },
-                    "calibrationId": { "type": "string", "nullable": true, "minLength": 1, "maxLength": 128 },
+                    "calibrationId": { "type": "string", "nullable": true, "minLength": 1 },
                     "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
                     "calculationEligibility": { "type": "string", "enum": ["eligible", "review_required"] }
                   }
@@ -475,12 +468,12 @@ kind: research
                     "calculationEligibility"
                   ],
                   "properties": {
-                    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
-                    "value": { "type": "number", "exclusiveMinimum": 0 },
+                    "id": { "type": "string", "minLength": 1 },
+                    "value": { "type": "number" },
                     "unit": { "type": "string", "enum": ["mm", "cm", "m", "in", "ft"] },
                     "unitSource": { "type": "string", "enum": ["label", "drawing"] },
                     "method": { "type": "string", "enum": ["printed", "scale_derived"] },
-                    "sourceText": { "type": "string", "nullable": true, "maxLength": 500 },
+                    "sourceText": { "type": "string", "nullable": true },
                     "evidence": {
                       "type": "array",
                       "items": {
@@ -490,12 +483,12 @@ kind: research
                         "properties": {
                           "x": { "type": "number", "minimum": 0, "maximum": 1 },
                           "y": { "type": "number", "minimum": 0, "maximum": 1 },
-                          "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
-                          "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+                          "width": { "type": "number", "maximum": 1 },
+                          "height": { "type": "number", "maximum": 1 }
                         }
                       }
                     },
-                    "calibrationId": { "type": "string", "nullable": true, "minLength": 1, "maxLength": 128 },
+                    "calibrationId": { "type": "string", "nullable": true, "minLength": 1 },
                     "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
                     "calculationEligibility": { "type": "string", "enum": ["eligible", "review_required"] }
                   }
@@ -507,7 +500,6 @@ kind: research
           },
           "openings": {
             "type": "array",
-            "maxItems": 64,
             "items": {
               "type": "object",
               "additionalProperties": false,
@@ -523,9 +515,9 @@ kind: research
                 "calculationEligibility"
               ],
               "properties": {
-                "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+                "id": { "type": "string", "minLength": 1 },
                 "kind": { "type": "string", "enum": ["door", "window", "opening", "unknown"] },
-                "wallId": { "type": "string", "nullable": true, "minLength": 1, "maxLength": 128 },
+                "wallId": { "type": "string", "nullable": true, "minLength": 1 },
                 "start": {
                   "type": "object",
                   "nullable": true,
@@ -563,12 +555,12 @@ kind: research
                     "calculationEligibility"
                   ],
                   "properties": {
-                    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
-                    "value": { "type": "number", "exclusiveMinimum": 0 },
+                    "id": { "type": "string", "minLength": 1 },
+                    "value": { "type": "number" },
                     "unit": { "type": "string", "enum": ["mm", "cm", "m", "in", "ft"] },
                     "unitSource": { "type": "string", "enum": ["label", "drawing"] },
                     "method": { "type": "string", "enum": ["printed", "scale_derived"] },
-                    "sourceText": { "type": "string", "nullable": true, "maxLength": 500 },
+                    "sourceText": { "type": "string", "nullable": true },
                     "evidence": {
                       "type": "array",
                       "items": {
@@ -578,12 +570,12 @@ kind: research
                         "properties": {
                           "x": { "type": "number", "minimum": 0, "maximum": 1 },
                           "y": { "type": "number", "minimum": 0, "maximum": 1 },
-                          "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
-                          "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+                          "width": { "type": "number", "maximum": 1 },
+                          "height": { "type": "number", "maximum": 1 }
                         }
                       }
                     },
-                    "calibrationId": { "type": "string", "nullable": true, "minLength": 1, "maxLength": 128 },
+                    "calibrationId": { "type": "string", "nullable": true, "minLength": 1 },
                     "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
                     "calculationEligibility": { "type": "string", "enum": ["eligible", "review_required"] }
                   }
@@ -605,12 +597,12 @@ kind: research
                     "calculationEligibility"
                   ],
                   "properties": {
-                    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
-                    "value": { "type": "number", "exclusiveMinimum": 0 },
+                    "id": { "type": "string", "minLength": 1 },
+                    "value": { "type": "number" },
                     "unit": { "type": "string", "enum": ["mm", "cm", "m", "in", "ft"] },
                     "unitSource": { "type": "string", "enum": ["label", "drawing"] },
                     "method": { "type": "string", "enum": ["printed", "scale_derived"] },
-                    "sourceText": { "type": "string", "nullable": true, "maxLength": 500 },
+                    "sourceText": { "type": "string", "nullable": true },
                     "evidence": {
                       "type": "array",
                       "items": {
@@ -620,12 +612,12 @@ kind: research
                         "properties": {
                           "x": { "type": "number", "minimum": 0, "maximum": 1 },
                           "y": { "type": "number", "minimum": 0, "maximum": 1 },
-                          "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
-                          "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+                          "width": { "type": "number", "maximum": 1 },
+                          "height": { "type": "number", "maximum": 1 }
                         }
                       }
                     },
-                    "calibrationId": { "type": "string", "nullable": true, "minLength": 1, "maxLength": 128 },
+                    "calibrationId": { "type": "string", "nullable": true, "minLength": 1 },
                     "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
                     "calculationEligibility": { "type": "string", "enum": ["eligible", "review_required"] }
                   }
@@ -647,12 +639,12 @@ kind: research
                     "calculationEligibility"
                   ],
                   "properties": {
-                    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
-                    "value": { "type": "number", "exclusiveMinimum": 0 },
+                    "id": { "type": "string", "minLength": 1 },
+                    "value": { "type": "number" },
                     "unit": { "type": "string", "enum": ["mm", "cm", "m", "in", "ft"] },
                     "unitSource": { "type": "string", "enum": ["label", "drawing"] },
                     "method": { "type": "string", "enum": ["printed", "scale_derived"] },
-                    "sourceText": { "type": "string", "nullable": true, "maxLength": 500 },
+                    "sourceText": { "type": "string", "nullable": true },
                     "evidence": {
                       "type": "array",
                       "items": {
@@ -662,12 +654,12 @@ kind: research
                         "properties": {
                           "x": { "type": "number", "minimum": 0, "maximum": 1 },
                           "y": { "type": "number", "minimum": 0, "maximum": 1 },
-                          "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
-                          "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+                          "width": { "type": "number", "maximum": 1 },
+                          "height": { "type": "number", "maximum": 1 }
                         }
                       }
                     },
-                    "calibrationId": { "type": "string", "nullable": true, "minLength": 1, "maxLength": 128 },
+                    "calibrationId": { "type": "string", "nullable": true, "minLength": 1 },
                     "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
                     "calculationEligibility": { "type": "string", "enum": ["eligible", "review_required"] }
                   }
@@ -679,8 +671,7 @@ kind: research
           "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
           "warnings": {
             "type": "array",
-            "maxItems": 100,
-            "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+            "items": { "type": "string", "minLength": 1 }
           },
           "readiness": {
             "type": "object",
@@ -712,7 +703,7 @@ kind: research
                     "opening_wall_ambiguous"
                   ]
                 },
-                "targetId": { "type": "string", "nullable": true, "minLength": 1, "maxLength": 128 }
+                "targetId": { "type": "string", "nullable": true, "minLength": 1 }
               }
             }
           }
@@ -721,8 +712,7 @@ kind: research
     },
     "warnings": {
       "type": "array",
-      "maxItems": 100,
-      "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+      "items": { "type": "string", "minLength": 1 }
     }
   }
 }
