@@ -4,7 +4,7 @@ import DocumentDealsWidget from './widget.client'
 // No `features` gate: the host page already enforces the sales document's own view
 // grant, and a widget-level gate would hide the LIST from users entitled to read it
 // just because they cannot write. A missing write grant surfaces as a 403 on use.
-const widget: InjectionWidgetModule<{ resourceId?: string }> = {
+const widget: InjectionWidgetModule<{ resourceId?: string; kind?: 'quote' | 'order' }> = {
   metadata: {
     id: 'deal_links.injection.document-deals',
     title: 'Linked deals',

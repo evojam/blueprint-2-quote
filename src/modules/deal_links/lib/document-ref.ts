@@ -31,6 +31,17 @@ export function isDocumentKind(raw: unknown): raw is DocumentKind {
   return typeof raw === 'string' && (DOCUMENT_KINDS as readonly string[]).includes(raw)
 }
 
+/**
+ * Shape check only, deliberately reusing `UUID_RE` above rather than a second
+ * regex: both the document-side and deal-side pickers need "does this look
+ * like a UUID" without pinning the version/variant nibbles the server's
+ * `z.string().uuid()` doesn't either. The server remains the authority on
+ * what is actually acceptable.
+ */
+export function isLikelyUuid(value: string): boolean {
+  return UUID_RE.test(value.trim())
+}
+
 export function encodeDocumentRef(ref: DocumentRef): string {
   return `${ref.documentKind}:${ref.documentId}`
 }

@@ -7,8 +7,12 @@ type DealItem = { id: string; title: string | null }
  * Deal options for the picker on the sales document tab.
  *
  * Unlike `loadDocumentOptions` there is only one source, so there is no half to
- * degrade: a failure propagates to the caller rather than rendering as an empty
- * dropdown.
+ * degrade to: this loader refuses to manufacture an empty list and lets a
+ * failure propagate to its caller instead. The caller is `ComboboxInput`'s
+ * `loadSuggestions` effect, which does swallow it (`.catch(() => {})` in
+ * `@open-mercato/ui/backend/inputs/ComboboxInput.tsx`) and renders "No matches
+ * found" — so the failure does still reach the user, just as an empty dropdown
+ * one layer up rather than here.
  *
  * HACK(hackathon): when tenant data encryption is on, the deals route collapses
  * any `search` to "no matches" rather than scanning ciphertext
