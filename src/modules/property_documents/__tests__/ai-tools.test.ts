@@ -90,7 +90,10 @@ async function writeTestImage(
   const drawing = canvas.getContext('2d')
   drawing.fillStyle = '#fff'
   drawing.fillRect(0, 0, width, height)
-  await writeFile(filePath, await canvas.encode(format))
+  await writeFile(
+    filePath,
+    format === 'png' ? canvas.toBuffer('image/png') : await canvas.encode(format),
+  )
 }
 
 function makeRoomMeasurementResult(
