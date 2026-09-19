@@ -5,7 +5,9 @@ import {
   resolveCustomerEntityIdByEmail,
   resolveEntityClass,
 } from '@open-mercato/core/modules/inbox_ops/lib/executionHelpers'
+import { splitPersonName } from '@open-mercato/core/modules/inbox_ops/lib/contactValidation'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
+import { isValidPhoneNumber } from '@open-mercato/shared/lib/phone'
 import { createLogger } from '@open-mercato/shared/lib/logger'
 
 const logger = createLogger('rfq_intake').child({ component: 'ensure-contact' })
@@ -35,6 +37,42 @@ function trimmed(value: unknown): string | null {
 }
 
 /**
+ * The installed person command rejects a phone it cannot parse, and an unusable phone
+ * must never cost us the contact. A signature often carries "22 123 45 67" with no
+ * country code, so validate with the same helper the schema uses and drop what fails.
+ */
+function usablePhone(phone: string | null): string | null {
+  if (!phone) return null
+  return isValidPhoneNumber(phone) ? phone : null
+}
+
+/**
+ * `customers.people.create` requires BOTH `firstName` and `lastName`, each at least one
+ * character (`customers/data/validators.ts:138`). An RFQ signature gives us one free-form
+ * string, so this derives the two parts and never returns an empty one:
+ *
+ *   "Marek Grochala"      -> Marek / Grochala
+ *   "Marek" + the company -> Marek / Evojam Sp. z o.o.
+ *   "Marek" + no company  -> Marek / evojam   (the e-mail domain's first label)
+ *   nothing at all        -> the local part, split on . _ - when it can be
+ *
+ * The placeholder last names are deliberate: a costing clerk sees and fixes them in the
+ * CRM, whereas a rejected create leaves the RFQ with no contact at all.
+ */
+function derivePersonName(
+  name: string | null,
+  email: string,
+  companyName: string | null,
+): { firstName: string; lastName: string } {
+  const split = splitPersonName(name ?? '', email)
+  const localPart = trimmed(email.split('@')[0] ?? null)
+  const domainLabel = trimmed(email.split('@')[1]?.split('.')[0] ?? null)
+  const firstName = trimmed(split.firstName) ?? localPart ?? email
+  const lastName = trimmed(split.lastName) ?? companyName ?? domainLabel ?? localPart ?? email
+  return { firstName: firstName.slice(0, 120), lastName: lastName.slice(0, 120) }
+}
+
+/**
  * Guarantees the sender exists as a CRM person before the RFQ case is opened.
  *
  * The extraction worker already PROPOSES `create_contact` / `link_contact` beside
@@ -46,6 +84,10 @@ function trimmed(value: unknown): string | null {
  * An existing person is enriched in EMPTY fields only. A costing clerk's manual
  * correction outranks a name or phone the LLM lifted from a signature, and the next
  * RFQ from the same address must not silently undo it.
+ *
+ * The contact is best effort: a failed create is logged and returns null so the RFQ
+ * case still opens. Losing the whole enquiry because one CRM row could not be written
+ * is the worse outcome, and the case body still carries the sender's e-mail.
  */
 export async function ensureContact(
   ctx: InboxActionExecutionContext,
@@ -54,7 +96,7 @@ export async function ensureContact(
   const hCtx = asHelperContext(ctx)
   const email = trimmed(hints.email)?.toLowerCase() ?? null
   const name = trimmed(hints.name)
-  const phone = trimmed(hints.phone)
+  const phone = usablePhone(trimmed(hints.phone))
   const companyName = trimmed(hints.companyName)
 
   if (!email) {
@@ -72,22 +114,32 @@ export async function ensureContact(
     return { customerEntityId: existingId, companyEntityId, created: false }
   }
 
-  const result = await executeCommand<Record<string, unknown>, { entityId?: string; id?: string }>(
-    hCtx,
-    'customers.people.create',
-    {
-      tenantId: ctx.tenantId,
-      organizationId: ctx.organizationId,
-      name: name ?? email,
+  const { firstName, lastName } = derivePersonName(name, email, companyName)
+  try {
+    const result = await executeCommand<Record<string, unknown>, { entityId?: string; id?: string }>(
+      hCtx,
+      'customers.people.create',
+      {
+        tenantId: ctx.tenantId,
+        organizationId: ctx.organizationId,
+        firstName,
+        lastName,
+        primaryEmail: email,
+        ...(phone ? { primaryPhone: phone } : {}),
+        ...(companyEntityId ? { companyEntityId } : {}),
+        source: 'inbox_ops',
+      },
+    )
+    const createdId = result?.entityId ?? result?.id
+    if (!createdId) return null
+    return { customerEntityId: createdId, companyEntityId, created: true }
+  } catch (error) {
+    logger.warn('Failed to create the RFQ contact; opening the case without one', {
+      err: error,
       email,
-      ...(phone ? { phone } : {}),
-      ...(companyName ? { companyName } : {}),
-      source: 'inbox_ops',
-    },
-  )
-  const createdId = result?.entityId ?? result?.id
-  if (!createdId) return null
-  return { customerEntityId: createdId, companyEntityId, created: true }
+    })
+    return null
+  }
 }
 
 async function ensureCompany(
@@ -102,7 +154,7 @@ async function ensureCompany(
       {
         tenantId: ctx.tenantId,
         organizationId: ctx.organizationId,
-        name: companyName,
+        displayName: companyName.slice(0, 200),
         source: 'inbox_ops',
       },
     )
@@ -139,8 +191,8 @@ async function enrichEmptyFields(
   if (!entity) return
 
   const patch: Record<string, unknown> = {}
-  if (values.name && !trimmed(entity.displayName)) patch.name = values.name
-  if (values.phone && !trimmed(entity.primaryPhone)) patch.phone = values.phone
+  if (values.name && !trimmed(entity.displayName)) patch.displayName = values.name.slice(0, 200)
+  if (values.phone && !trimmed(entity.primaryPhone)) patch.primaryPhone = values.phone
   if (Object.keys(patch).length === 0) return
 
   try {

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, jest } from '@jest/globals'
+import { personCreateSchema, companyCreateSchema } from '@open-mercato/core/modules/customers/data/validators'
 
 const executeCommand = jest.fn<(...args: any[]) => Promise<any>>()
 const resolveCustomerEntityIdByEmail = jest.fn<(...args: any[]) => Promise<string | null>>()
@@ -27,6 +28,12 @@ function commandIds(): string[] {
   return executeCommand.mock.calls.map((call) => call[1] as string)
 }
 
+function payloadFor(commandId: string): Record<string, unknown> {
+  const call = executeCommand.mock.calls.find((entry) => entry[1] === commandId)
+  if (!call) throw new Error(`${commandId} was never executed`)
+  return call[2] as Record<string, unknown>
+}
+
 describe('ensureContact', () => {
   beforeEach(() => {
     executeCommand.mockReset()
@@ -43,13 +50,59 @@ describe('ensureContact', () => {
     expect(result).toEqual({ customerEntityId: 'person-1', companyEntityId: null, created: true })
     expect(commandIds()).toEqual(['customers.people.create'])
     // Normalized, so a second RFQ from "ANNA@example.com" resolves the same row.
-    expect(executeCommand.mock.calls[0][2]).toMatchObject({ email: 'anna@example.com' })
+    expect(payloadFor('customers.people.create')).toMatchObject({
+      firstName: 'Anna',
+      lastName: 'Kowalska',
+      primaryEmail: 'anna@example.com',
+    })
+  })
+
+  // The create used to be written against invented field names and every run failed on
+  // the installed schema. Parse the real thing so the contract cannot drift silently.
+  it('sends a payload the installed person command accepts', async () => {
+    resolveCustomerEntityIdByEmail.mockResolvedValue(null)
+    executeCommand.mockResolvedValue({ entityId: 'person-1' })
+
+    await ensureContact(ctx, {
+      email: 'marek@evojam.com',
+      name: 'Marek Grochala',
+      phone: '+48 600 100 200',
+    })
+
+    expect(personCreateSchema.safeParse(payloadFor('customers.people.create')).success).toBe(true)
+  })
+
+  it('falls back to the company, then the e-mail, when the signature gives one word', async () => {
+    resolveCustomerEntityIdByEmail.mockResolvedValue(null)
+    executeCommand.mockResolvedValue({ entityId: 'person-1' })
+
+    await ensureContact(ctx, { email: 'marek@evojam.com', name: 'Marek' })
+    expect(payloadFor('customers.people.create')).toMatchObject({
+      firstName: 'Marek',
+      lastName: 'evojam',
+    })
+
+    executeCommand.mockClear()
+    await ensureContact(ctx, { email: 'biuro@evojam.com' })
+    expect(payloadFor('customers.people.create')).toMatchObject({
+      firstName: 'biuro',
+      lastName: 'evojam',
+    })
+  })
+
+  it('drops a phone the installed schema would reject rather than losing the contact', async () => {
+    resolveCustomerEntityIdByEmail.mockResolvedValue(null)
+    executeCommand.mockResolvedValue({ entityId: 'person-1' })
+
+    await ensureContact(ctx, { email: 'anna@example.com', name: 'Anna Kowalska', phone: 'tel. wewn. 12' })
+
+    expect(payloadFor('customers.people.create')).not.toHaveProperty('primaryPhone')
   })
 
   it('ensures the company as well when the thread names one', async () => {
     resolveCustomerEntityIdByEmail.mockResolvedValue(null)
     executeCommand.mockImplementation(async (_ctx: any, id: string) =>
-      id === 'customers.companies.create' ? { entityId: 'company-1' } : { entityId: 'person-1' },
+      id === 'customers.companies.create' ? { entityId: '33333333-3333-4333-8333-333333333333' } : { entityId: 'person-1' },
     )
 
     const result = await ensureContact(ctx, {
@@ -58,8 +111,10 @@ describe('ensureContact', () => {
       companyName: 'Kowalska Remonty',
     })
 
-    expect(result?.companyEntityId).toBe('company-1')
+    expect(result?.companyEntityId).toBe('33333333-3333-4333-8333-333333333333')
     expect(commandIds()).toEqual(['customers.companies.create', 'customers.people.create'])
+    expect(companyCreateSchema.safeParse(payloadFor('customers.companies.create')).success).toBe(true)
+    expect(personCreateSchema.safeParse(payloadFor('customers.people.create')).success).toBe(true)
   })
 
   it('fills only empty fields on an existing person', async () => {
@@ -79,10 +134,10 @@ describe('ensureContact', () => {
 
     expect(result).toEqual({ customerEntityId: 'person-9', companyEntityId: null, created: false })
     expect(commandIds()).toEqual(['customers.people.update'])
-    const patch = executeCommand.mock.calls[0][2] as Record<string, unknown>
+    const patch = payloadFor('customers.people.update')
     // The signature-derived name must not overwrite what a human already curated.
-    expect(patch).not.toHaveProperty('name')
-    expect(patch).toMatchObject({ phone: '+48 600 100 200' })
+    expect(patch).not.toHaveProperty('displayName')
+    expect(patch).toMatchObject({ primaryPhone: '+48 600 100 200' })
   })
 
   it('writes nothing when the existing person already has every field', async () => {
@@ -118,5 +173,14 @@ describe('ensureContact', () => {
     })
 
     expect(result).toEqual({ customerEntityId: 'person-1', companyEntityId: null, created: true })
+  })
+
+  it('opens the case without a contact when the person command fails', async () => {
+    resolveCustomerEntityIdByEmail.mockResolvedValue(null)
+    executeCommand.mockRejectedValue(new Error('customers service down'))
+
+    const result = await ensureContact(ctx, { email: 'anna@example.com', name: 'Anna Kowalska' })
+
+    expect(result).toBeNull()
   })
 })
