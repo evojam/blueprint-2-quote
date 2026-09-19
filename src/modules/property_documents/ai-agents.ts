@@ -14,10 +14,14 @@ import {
   fileAgentDescriptors,
   type FileAgentDescriptor,
 } from '../../../.mercato/generated/file-agents.generated'
-import { PDF_AGENT_ID, ROOM_DIMENSIONS_AGENT_ID } from './ai-tools'
+import {
+  PDF_AGENT_ID,
+  ROOM_DIMENSIONS_AGENT_ID,
+  ROOM_MEASUREMENTS_AGENT_ID,
+} from './ai-tools'
+import { roomMeasurementSetSchema } from './room-measurements-contract'
 
-export { ROOM_DIMENSIONS_AGENT_ID } from './ai-tools'
-
+export { ROOM_DIMENSIONS_AGENT_ID, ROOM_MEASUREMENTS_AGENT_ID } from './ai-tools'
 export const CATALOG_MATCHER_AGENT_ID = 'property_documents.catalog_matcher'
 
 const catalogMatcherMatchSchema = z
@@ -236,9 +240,10 @@ const catalogMatcherAgent = registerCatalogMatcherAgent()
 
 const FILE_CONFIGS: Record<string, FileAgentFilesConfig> = {
   [PDF_AGENT_ID]: { enabled: true, inputs: true, outputs: true, bash: false },
-  // HACK(hackathon): enterprise 0.8 enables every file workspace only when outputs=true;
-  // the generated OpenCode policy still denies writes, so this agent captures no files.
+  // HACK(hackathon): enterprise 0.8 enables image workspaces only when outputs=true;
+  // the hardened OpenCode policies still deny writes, so neither agent captures model-authored files.
   [ROOM_DIMENSIONS_AGENT_ID]: { enabled: true, inputs: true, outputs: true, bash: false },
+  [ROOM_MEASUREMENTS_AGENT_ID]: { enabled: true, inputs: true, outputs: true, bash: false },
 }
 
 function registerGeneratedFileAgent(descriptor: FileAgentDescriptor): void {
@@ -246,10 +251,15 @@ function registerGeneratedFileAgent(descriptor: FileAgentDescriptor): void {
     id: descriptor.id,
     moduleId: descriptor.moduleId,
     resultKind: descriptor.resultKind,
-    schema: compileOutcome({
-      kind: descriptor.resultKind,
-      schema: descriptor.outcomeSchema,
-    }).resultSchema,
+    schema:
+      descriptor.id === ROOM_MEASUREMENTS_AGENT_ID
+        ? z
+            .object({ kind: z.literal('research'), data: roomMeasurementSetSchema })
+            .strict()
+        : compileOutcome({
+            kind: descriptor.resultKind,
+            schema: descriptor.outcomeSchema,
+          }).resultSchema,
     tools: descriptor.tools,
     skills: descriptor.skills,
     subAgents: descriptor.subAgents,
@@ -276,7 +286,7 @@ function registerGeneratedFileAgent(descriptor: FileAgentDescriptor): void {
   }
 }
 
-for (const agentId of [PDF_AGENT_ID, ROOM_DIMENSIONS_AGENT_ID]) {
+for (const agentId of [PDF_AGENT_ID, ROOM_DIMENSIONS_AGENT_ID, ROOM_MEASUREMENTS_AGENT_ID]) {
   const descriptor = fileAgentDescriptors.find((candidate) => candidate.id === agentId)
   if (!descriptor) {
     throw new Error(`[internal] missing generated file-agent descriptor "${agentId}"`)
