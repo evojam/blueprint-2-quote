@@ -26,6 +26,8 @@ export type ActionExecutedPayload = {
   actionType?: string | null
   createdEntityId?: string | null
   createdEntityType?: string | null
+  /** Whoever accepted the action in the inbox; `inbox_ops` puts it on the event. */
+  executedByUserId?: string | null
   tenantId?: string | null
   organizationId?: string | null
 }
@@ -36,6 +38,19 @@ export type RfqCreatedEvent = {
   emailId: string
   tenantId: string
   organizationId: string
+  /**
+   * The identity the whole chain runs as, and the reason this field is not
+   * decoration: `loadCodeTriggers` reads exactly `payload.userId` (or
+   * `actorUserId`) and falls back to `initiatedBy: 'trigger:<id>'` when neither is
+   * present — an instance with no actor at all.
+   *
+   * A code workflow has no `grantedFeatures` and its virtual definition carries no
+   * `createdBy`, so there is no second place to recover an identity from. Without
+   * this field `INVOKE_AGENT` has no traceable principal and `UPDATE_ENTITY` fails
+   * with "requires an authenticated workflow user" — the chain dies on its first
+   * step.
+   */
+  userId: string
   __files: { attachments: Array<{ attachmentId: string }> }
 }
 
@@ -72,6 +87,7 @@ export default async function handler(
   const proposalId = trimmed(payload.proposalId)
   const tenantId = trimmed(payload.tenantId)
   const organizationId = trimmed(payload.organizationId)
+  const userId = trimmed(payload.executedByUserId)
 
   // Scope arrives on the event from the authenticated execution context. Missing
   // scope must never widen a query — fail closed instead.
@@ -79,6 +95,17 @@ export default async function handler(
     logger.warn('Executed RFQ action carries incomplete scope; not starting the analysis', {
       dealId,
       hasProposal: Boolean(proposalId),
+    })
+    return
+  }
+
+  // Same treatment for the actor, and for a stronger reason than tidiness: a run
+  // without one cannot invoke an agent or execute a command, so emitting anyway
+  // would buy a workflow instance that exists only to fail. Say why instead.
+  if (!userId) {
+    logger.warn('Executed RFQ action carries no acting user; not starting the analysis', {
+      dealId,
+      proposalId,
     })
     return
   }
@@ -127,6 +154,7 @@ export default async function handler(
     emailId: proposal.inboxEmailId,
     tenantId,
     organizationId,
+    userId,
     __files: { attachments: attachmentIds.map((attachmentId) => ({ attachmentId })) },
   }
 
