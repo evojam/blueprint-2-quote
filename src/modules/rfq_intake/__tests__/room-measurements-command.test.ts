@@ -102,6 +102,20 @@ function measurement(imageWidthPx: number) {
   }
 }
 
+function unreadableMeasurement(warning: string) {
+  return {
+    ...measurement(1),
+    analysisStatus: 'unreadable' as const,
+    drawing: {
+      ...measurement(1).drawing,
+      imageWidthPx: 1,
+      imageHeightPx: 1,
+      warnings: [warning],
+    },
+    warnings: [warning],
+  }
+}
+
 function artifact(fileName: string, mimeType = 'image/png'): Artifact {
   const bytes = artifactBytes(fileName, mimeType)
   return {
@@ -235,33 +249,32 @@ function buildHarness(overrides: { artifacts?: Artifact[]; inventory?: unknown }
 }
 
 describe('measureRoomsCommand', () => {
-  it('serializes page promotion and room-measurement runs', async () => {
+  it('promotes and measures only the final rendered page for the POC', async () => {
     const harness = buildHarness()
     const pending = measureRoomsCommand.execute(INPUT, harness.ctx)
 
     await nextTurn()
-    expect(harness.promotionCalls).toHaveLength(1)
-    expect(harness.agentRuntime.run).toHaveBeenCalledTimes(1)
-    expect(harness.promotionCalls[0]).toEqual({
-      commandId: 'agent_orchestrator.artifact.promote',
-      input: {
-        tenantId: INPUT.tenantId,
-        organizationId: INPUT.organizationId,
-        artifactId: 'artifact-pdf-page-0001.png',
-        entityId: 'customers:customer_deal',
-        recordId: INPUT.dealId,
-        fileName: 'pdf-page-0001.png',
+    expect(harness.promotionCalls).toEqual([
+      {
+        commandId: 'agent_orchestrator.artifact.promote',
+        input: {
+          tenantId: INPUT.tenantId,
+          organizationId: INPUT.organizationId,
+          artifactId: 'artifact-pdf-page-0003.png',
+          entityId: 'customers:customer_deal',
+          recordId: INPUT.dealId,
+          fileName: 'pdf-page-0003.png',
+        },
       },
-    })
-    expect(harness.agentRuntime.run).toHaveBeenNthCalledWith(
-      1,
+    ])
+    expect(harness.agentRuntime.run).toHaveBeenCalledWith(
       'property_documents.room_measurements',
       {
         __files: {
           attachments: [
             {
-              attachmentId: 'attachment-artifact-pdf-page-0001.png',
-              as: 'pdf-page-0001.png',
+              attachmentId: 'attachment-artifact-pdf-page-0003.png',
+              as: 'pdf-page-0003.png',
             },
           ],
         },
@@ -271,72 +284,64 @@ describe('measureRoomsCommand', () => {
         organizationId: INPUT.organizationId,
         workflowInstanceId: INPUT.workflowInstanceId,
         stepId: 'measure_rooms',
-        invocationId: 'room-measurement:artifact-pdf-page-0001.png',
+        invocationId: 'room-measurement:artifact-pdf-page-0003.png',
       }),
     )
-
-    harness.waits.get('room-measurement:artifact-pdf-page-0001.png')!.resolve({
-      kind: 'research',
-      data: measurement(101),
-    })
-    await nextTurn()
-    expect(harness.promotionCalls).toHaveLength(2)
-    expect(harness.agentRuntime.run).toHaveBeenCalledTimes(2)
-
-    harness.waits.get('room-measurement:artifact-pdf-page-0002.png')!.resolve({
-      kind: 'research',
-      data: measurement(102),
-    })
-    await nextTurn()
-    expect(harness.promotionCalls).toHaveLength(3)
-    expect(harness.agentRuntime.run).toHaveBeenCalledTimes(3)
 
     harness.waits.get('room-measurement:artifact-pdf-page-0003.png')!.resolve({
       kind: 'research',
       data: measurement(103),
     })
+
     await expect(pending).resolves.toEqual({
       intakeRunId: RUN_ID,
-      totalPages: 3,
-      succeeded: 3,
+      totalPages: 1,
+      succeeded: 1,
       failed: [],
-      measurements: [
-        { fileName: 'pdf-page-0001.png', data: measurement(101) },
-        { fileName: 'pdf-page-0002.png', data: measurement(102) },
-        { fileName: 'pdf-page-0003.png', data: measurement(103) },
-      ],
+      measurements: [{ fileName: 'pdf-page-0003.png', data: measurement(103) }],
     })
   })
 
-  it('continues with the next page after one room measurement run fails', async () => {
+  it('reports a failed final-page measurement without invoking another page', async () => {
     const harness = buildHarness()
+    const pending = measureRoomsCommand.execute(INPUT, harness.ctx)
+
+    await nextTurn()
+    harness.waits.get('room-measurement:artifact-pdf-page-0003.png')!.reject(new Error('provider unavailable'))
+
+    await expect(pending).resolves.toEqual({
+      intakeRunId: RUN_ID,
+      totalPages: 1,
+      succeeded: 0,
+      failed: [{ fileName: 'pdf-page-0003.png', reason: 'provider unavailable' }],
+      measurements: [],
+    })
+    expect(harness.agentRuntime.run).toHaveBeenCalledTimes(1)
+  })
+  it('preserves an unreadable agent warning instead of masking it as a dimensions mismatch', async () => {
+    const fileName = 'pdf-page-0001.png'
+    const warning = 'schema union-type limit exceeded on model invocation.'
+    const harness = buildHarness({
+      artifacts: [artifact(fileName)],
+      inventory: { pageCount: 1, files: [fileName] },
+    })
     const pending = measureRoomsCommand.execute(INPUT, harness.ctx)
 
     await nextTurn()
     harness.waits.get('room-measurement:artifact-pdf-page-0001.png')!.resolve({
       kind: 'research',
-      data: measurement(101),
-    })
-    await nextTurn()
-    harness.waits.get('room-measurement:artifact-pdf-page-0002.png')!.reject(new Error('provider unavailable'))
-    await nextTurn()
-    expect(harness.agentRuntime.run).toHaveBeenCalledTimes(3)
-    harness.waits.get('room-measurement:artifact-pdf-page-0003.png')!.resolve({
-      kind: 'research',
-      data: measurement(103),
+      data: unreadableMeasurement(warning),
     })
 
     await expect(pending).resolves.toEqual({
       intakeRunId: RUN_ID,
-      totalPages: 3,
-      succeeded: 2,
-      failed: [{ fileName: 'pdf-page-0002.png', reason: 'provider unavailable' }],
-      measurements: [
-        { fileName: 'pdf-page-0001.png', data: measurement(101) },
-        { fileName: 'pdf-page-0003.png', data: measurement(103) },
-      ],
+      totalPages: 1,
+      succeeded: 0,
+      failed: [{ fileName, reason: warning }],
+      measurements: [],
     })
   })
+
 
   it('rejects a fabricated unreadable result whose dimensions do not match the staged page', async () => {
     const fileName = 'pdf-page-0001.png'
