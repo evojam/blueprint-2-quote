@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { CommandHandler } from '@open-mercato/shared/lib/commands'
 import { registerCommand } from '@open-mercato/shared/lib/commands'
@@ -8,26 +8,45 @@ import {
   AgentRunArtifact,
 } from '@open-mercato/enterprise/modules/agent_orchestrator/data/entities'
 import { getArtifactBytes } from '@open-mercato/enterprise/modules/agent_orchestrator/lib/runtime/artifactFileStore'
+import {
+  CATALOG_MATCHER_AGENT_ID,
+  catalogMatcherGroupedResultSchema,
+} from '@/modules/property_documents/ai-agents'
 import { PDF_AGENT_ID } from '@/modules/property_documents/ai-tools'
 
 const BRIEF_FILE = 'brief.json'
 const PAGE_INVENTORY_FILE = 'pdf-pages.json'
-const MAX_PDF_PAGES = 48
-const DEFERRED_ERROR = '[internal] PDF_INTAKE_DOWNSTREAM_DEFERRED'
-const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+const MAX_BRIEF_BYTES = 65_536
 
 const analysisInputSchema = z
   .object({
     tenantId: z.string().uuid(),
     organizationId: z.string().uuid(),
-    dealId: z.string().uuid(),
     workflowInstanceId: z.string().uuid(),
-    stepId: z.string().min(1).optional(),
+    stepId: z.literal('match_catalog'),
   })
   .strict()
 export type AnalysisInput = z.infer<typeof analysisInputSchema>
-
+export type PdfIntakeBrief = {
+  runId: string
+  brief: string
+}
+type GroupedMatcherResult = z.infer<typeof catalogMatcherGroupedResultSchema>
 type CommandCtx = Parameters<CommandHandler<AnalysisInput, unknown>['execute']>[1]
+type AgentRuntime = {
+  run: (
+    agentId: string,
+    input: unknown,
+    ctx: {
+      tenantId: string
+      organizationId: string
+      userId: string
+      workflowInstanceId: string
+      stepId: 'match_catalog'
+      invocationId: string
+    },
+  ) => Promise<unknown>
+}
 
 const controlArtifactRefSchema = z
   .object({
@@ -46,41 +65,7 @@ const intakeResultSchema = z
     summary: z.string().max(2_000).optional(),
   })
   .strict()
-const briefSchema = z.object({ brief: z.string() }).strict()
-const pageInventorySchema = z
-  .object({
-    pageCount: z.number().int().min(1).max(MAX_PDF_PAGES),
-    files: z.array(z.string()).min(1).max(MAX_PDF_PAGES),
-  })
-  .strict()
-  .superRefine((inventory, context) => {
-    if (inventory.files.length !== inventory.pageCount) {
-      context.addIssue({ code: 'custom', message: 'file count must equal pageCount' })
-      return
-    }
-    inventory.files.forEach((fileName, index) => {
-      const expected = `pdf-page-${String(index + 1).padStart(4, '0')}.png`
-      if (fileName !== expected) {
-        context.addIssue({
-          code: 'custom',
-          message: `page ${index + 1} must be named ${expected}`,
-          path: ['files', index],
-        })
-      }
-    })
-  })
-
-export type PdfIntakePageArtifact = {
-  sourcePage: number
-  artifactId: string
-  fileName: string
-}
-
-export type PdfIntakeArtifactSet = {
-  runId: string
-  brief: string
-  pages: PdfIntakePageArtifact[]
-}
+const briefSchema = z.object({ brief: z.string().min(1) }).strict()
 
 function failIntake(reason: string): never {
   throw new Error(`[internal] PDF intake ${reason.slice(0, 180)}`)
@@ -141,6 +126,7 @@ async function findIntakeRun(
     {
       ...scope,
       workflowInstanceId,
+      stepId: 'extract_pdf',
       agentId: PDF_AGENT_ID,
       deletedAt: null,
     },
@@ -148,11 +134,11 @@ async function findIntakeRun(
   )
 }
 
-export async function loadPdfIntakeArtifactSet(
+export async function loadPdfIntakeBrief(
   em: EntityManager,
   ctx: CommandCtx,
   rawInput: AnalysisInput,
-): Promise<PdfIntakeArtifactSet> {
+): Promise<PdfIntakeBrief> {
   const input = analysisInputSchema.parse(rawInput)
   const scope = trustedScope(input, ctx)
   const run = await findIntakeRun(em, scope, input.workflowInstanceId)
@@ -161,6 +147,7 @@ export async function loadPdfIntakeArtifactSet(
     run.tenantId !== scope.tenantId ||
     run.organizationId !== scope.organizationId ||
     run.workflowInstanceId !== input.workflowInstanceId ||
+    run.stepId !== 'extract_pdf' ||
     run.agentId !== PDF_AGENT_ID ||
     run.deletedAt != null ||
     run.status !== 'ok' ||
@@ -172,88 +159,105 @@ export async function loadPdfIntakeArtifactSet(
   const parsedResult = intakeResultSchema.safeParse(run.output)
   if (!parsedResult.success) failIntake('invalid AgentResult')
 
-  const artifacts = await em.find(AgentRunArtifact, {
+  const briefArtifact = await em.findOne(AgentRunArtifact, {
     ...scope,
     runId: run.id,
+    fileName: BRIEF_FILE,
     deletedAt: null,
   })
-  const byFileName = new Map<string, AgentRunArtifact>()
-  for (const artifact of artifacts) {
+  if (
+    !briefArtifact ||
+    briefArtifact.tenantId !== scope.tenantId ||
+    briefArtifact.organizationId !== scope.organizationId ||
+    briefArtifact.runId !== run.id ||
+    briefArtifact.fileName !== BRIEF_FILE ||
+    briefArtifact.deletedAt != null
+  ) {
+    failIntake('artifact scope mismatch')
+  }
+  if (briefArtifact.mimeType !== 'application/json') failIntake('invalid artifact metadata')
+
+  const briefReference = parsedResult.data.artifacts[0]
+  if (briefReference.artifactId != null && briefReference.artifactId !== briefArtifact.id) {
+    failIntake('invalid AgentResult')
+  }
+
+  const briefBytes = await readVerifiedArtifact(ctx, scope, briefArtifact)
+  if (briefBytes.length > MAX_BRIEF_BYTES) failIntake(`invalid ${BRIEF_FILE}`)
+  const { brief } = parseJsonArtifact(briefBytes, briefSchema, BRIEF_FILE)
+  return { runId: run.id, brief }
+}
+
+async function findSuccessfulGroupedMatcherRun(
+  em: EntityManager,
+  scope: { tenantId: string; organizationId: string },
+  workflowInstanceId: string,
+): Promise<GroupedMatcherResult | null> {
+  const runs = await em.find(
+    AgentRun,
+    {
+      ...scope,
+      workflowInstanceId,
+      stepId: 'match_catalog',
+      agentId: CATALOG_MATCHER_AGENT_ID,
+      status: 'ok',
+      deletedAt: null,
+    },
+    { orderBy: { createdAt: 'DESC' } },
+  )
+
+  for (const run of runs) {
     if (
-      artifact.tenantId !== scope.tenantId ||
-      artifact.organizationId !== scope.organizationId ||
-      artifact.runId !== run.id ||
-      artifact.deletedAt != null
+      run.tenantId !== scope.tenantId ||
+      run.organizationId !== scope.organizationId ||
+      run.workflowInstanceId !== workflowInstanceId ||
+      run.stepId !== 'match_catalog' ||
+      run.agentId !== CATALOG_MATCHER_AGENT_ID ||
+      run.status !== 'ok' ||
+      run.deletedAt != null
     ) {
-      failIntake('artifact scope mismatch')
+      continue
     }
-    if (byFileName.has(artifact.fileName)) failIntake('artifact set mismatch')
-    byFileName.set(artifact.fileName, artifact)
+    const parsed = catalogMatcherGroupedResultSchema.safeParse(run.output)
+    if (parsed.success) return parsed.data
   }
-
-  const briefArtifact = byFileName.get(BRIEF_FILE)
-  const inventoryArtifact = byFileName.get(PAGE_INVENTORY_FILE)
-  if (!briefArtifact || !inventoryArtifact) failIntake('artifact set mismatch')
-  if (
-    briefArtifact.mimeType !== 'application/json' ||
-    inventoryArtifact.mimeType !== 'application/json'
-  ) {
-    failIntake('invalid artifact metadata')
-  }
-
-  const [briefBytes, inventoryBytes] = await Promise.all([
-    readVerifiedArtifact(ctx, scope, briefArtifact),
-    readVerifiedArtifact(ctx, scope, inventoryArtifact),
-  ])
-  const brief = parseJsonArtifact(briefBytes, briefSchema, BRIEF_FILE)
-  const inventory = parseJsonArtifact(inventoryBytes, pageInventorySchema, PAGE_INVENTORY_FILE)
-  const expectedNames = [BRIEF_FILE, PAGE_INVENTORY_FILE, ...inventory.files]
-  if (
-    artifacts.length !== expectedNames.length ||
-    expectedNames.some((fileName) => !byFileName.has(fileName))
-  ) {
-    failIntake('artifact set mismatch')
-  }
-
-  for (const reference of parsedResult.data.artifacts) {
-    const row = byFileName.get(reference.fileName)!
-    if (reference.artifactId != null && reference.artifactId !== row.id) {
-      failIntake('invalid AgentResult')
-    }
-  }
-
-  const pages: PdfIntakePageArtifact[] = []
-  for (const [index, fileName] of inventory.files.entries()) {
-    const artifact = byFileName.get(fileName)!
-    if (artifact.mimeType !== 'image/png') failIntake('invalid artifact metadata')
-    const bytes = await readVerifiedArtifact(ctx, scope, artifact)
-    if (bytes.length < PNG_SIGNATURE.length || !bytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
-      failIntake('invalid PNG artifact')
-    }
-    pages.push({ sourcePage: index + 1, artifactId: artifact.id, fileName })
-  }
-
-  return { runId: run.id, brief: brief.brief, pages }
+  return null
 }
 
-async function validateThenDefer(rawInput: AnalysisInput, ctx: CommandCtx): Promise<never> {
-  const input = analysisInputSchema.parse(rawInput)
-  const em = (ctx.container.resolve('em') as EntityManager).fork()
-  await loadPdfIntakeArtifactSet(em, ctx, input)
-  throw new Error(DEFERRED_ERROR)
-}
-
-const analyzePlansCommand: CommandHandler<AnalysisInput, never> = {
-  id: 'rfq_intake.plans.analyze',
-  execute: validateThenDefer,
-}
-
-const matchRequirementsCommand: CommandHandler<AnalysisInput, never> = {
+const matchRequirementsCommand: CommandHandler<AnalysisInput, GroupedMatcherResult> = {
   id: 'rfq_intake.requirements.match',
-  execute: validateThenDefer,
+  execute: async (rawInput, ctx) => {
+    const input = analysisInputSchema.parse(rawInput)
+    const scope = trustedScope(input, ctx)
+    const em = (ctx.container.resolve('em') as EntityManager).fork()
+    const priorResult = await findSuccessfulGroupedMatcherRun(em, scope, input.workflowInstanceId)
+    if (priorResult) return priorResult
+
+    const { brief } = await loadPdfIntakeBrief(em, ctx, input)
+    const userId = ctx.auth?.sub
+    if (!userId) failIntake('trusted user is unavailable')
+    const agentRuntime = ctx.container.resolve('agentRuntime') as AgentRuntime
+    const result = await agentRuntime.run(
+      CATALOG_MATCHER_AGENT_ID,
+      {
+        mode: 'grouped',
+        text: brief,
+        maxNeeds: 40,
+        limitPerNeed: 5,
+      },
+      {
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        userId,
+        workflowInstanceId: input.workflowInstanceId,
+        stepId: 'match_catalog',
+        invocationId: randomUUID(),
+      },
+    )
+    return catalogMatcherGroupedResultSchema.parse(result)
+  },
 }
 
-registerCommand(analyzePlansCommand)
 registerCommand(matchRequirementsCommand)
 
-export { analyzePlansCommand, matchRequirementsCommand }
+export { matchRequirementsCommand }
