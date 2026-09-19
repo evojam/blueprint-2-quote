@@ -175,7 +175,9 @@ function buildCtx(fixture: Fixture = makeFixture()) {
   let artifactWhere: Record<string, unknown> | null = null
   let matcherWhere: Record<string, unknown> | null = null
   const agentRuntime = {
-    run: jest.fn(async () => fixture.runtimeResult),
+    run: jest
+      .fn<(agentId: string, input: unknown, ctx: unknown) => Promise<unknown>>()
+      .mockImplementation(async () => fixture.runtimeResult),
   }
   const em = {
     fork: () => em,
@@ -218,6 +220,7 @@ function buildCtx(fixture: Fixture = makeFixture()) {
       },
       selectedOrganizationId: INPUT.organizationId,
     } as never,
+    em,
     agentRuntime,
     get artifactWhere() {
       return artifactWhere
@@ -235,7 +238,7 @@ describe('loadPdfIntakeBrief', () => {
 
   it('returns only the exact raw brief after scoped validation', async () => {
     const harness = buildCtx()
-    await expect(loadPdfIntakeBrief((harness.ctx.container.resolve('em') as never), harness.ctx, INPUT)).resolves.toEqual({
+    await expect(loadPdfIntakeBrief(harness.em as never, harness.ctx, INPUT)).resolves.toEqual({
       runId: RUN_ID,
       brief: 'Exact raw text\f',
     })
