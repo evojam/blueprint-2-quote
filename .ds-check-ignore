@@ -1212,6 +1212,12 @@
       "rule": "hardcoded-palette",
       "match": "text-blue-500/70",
       "reason": "Existing scaffold styling retained as a bounded migration baseline."
+    },
+    {
+      "file": "src/modules/deal_links/widgets/injection/deal-documents/widget.client.tsx",
+      "rule": "arbitrary-tailwind",
+      "match": "sm:w-[260px]",
+      "reason": "Literal class copied from the installed DealLinkedEntitiesTab (@open-mercato/core/src/modules/customers/components/detail/DealLinkedEntitiesTab.tsx) so the tab matches People/Companies pixel-for-pixel, per Task 7 brief."
     }
   ]
 }
