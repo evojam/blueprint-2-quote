@@ -65,4 +65,10 @@ if (enterpriseModulesEnabled && enterpriseAgentsEnabled) {
   // orchestrator SDK, so it is only enabled alongside it.
   enabledModules.push({ id: 'agent_examples', from: '@app' })
   enabledModules.push({ id: 'property_documents', from: '@app' })
+  // RFQ intake: overrides the inbox `create_quote` action and owns the agent chain
+  // that reads the RFQ document. Registered LAST on purpose — the generated inbox
+  // action registry keeps the last definition for a type, so this entry has to come
+  // after `sales` for the override to win. It needs the orchestrator's agentRuntime
+  // and the property_documents agent ids, so it lives in this block.
+  enabledModules.push({ id: 'rfq_intake', from: '@app' })
 }
