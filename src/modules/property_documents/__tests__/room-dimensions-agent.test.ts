@@ -7,7 +7,7 @@ import {
   ensureAgentsLoaded,
   getAgentEntry,
 } from '@open-mercato/enterprise/modules/agent_orchestrator/lib/sdk/defineAgent'
-import { ROOM_DIMENSIONS_AGENT_ID } from '../ai-agents'
+import { ROOM_DIMENSIONS_AGENT_ID, ROOM_MEASUREMENTS_AGENT_ID } from '../ai-agents'
 import '../ai-agents'
 import { ROOM_DIMENSIONS_TOOL_ID } from '../ai-tools'
 
@@ -29,6 +29,23 @@ const validRoom = {
   warnings: [],
 }
 
+const validV2Result = {
+  schemaVersion: '1',
+  analysisStatus: 'not_floor_plan',
+  drawing: {
+    imageWidthPx: 1600,
+    imageHeightPx: 900,
+    declaredUnit: null,
+    declaredScale: null,
+    calibrations: [],
+    globalCeilingHeight: null,
+    confidence: 0.95,
+    warnings: [],
+  },
+  rooms: [],
+  warnings: [],
+}
+
 describe('property_documents.room_dimensions', () => {
   it('registers a read-only image file agent', async () => {
     await ensureAgentsLoaded()
@@ -47,10 +64,21 @@ describe('property_documents.room_dimensions', () => {
     )
   })
 
-  it('accepts a top-level room array and rejects wrappers or ungrouped dimensions', () => {
+  it('preserves the incompatible v1 array and v2 object boundary', () => {
+    const v1Schema = getAgentEntry(ROOM_DIMENSIONS_AGENT_ID)?.schema
+    const v2Schema = getAgentEntry(ROOM_MEASUREMENTS_AGENT_ID)?.schema
+    const v1Outcome = { kind: 'research', data: [validRoom] }
+    const v2Outcome = { kind: 'research', data: validV2Result }
+
+    expect(v1Schema?.safeParse(v1Outcome).success).toBe(true)
+    expect(v2Schema?.safeParse(v2Outcome).success).toBe(true)
+    expect(v1Schema?.safeParse(v2Outcome).success).toBe(false)
+    expect(v2Schema?.safeParse(v1Outcome).success).toBe(false)
+  })
+
+  it('rejects wrappers, ungrouped dimensions, and invalid room fields', () => {
     const schema = getAgentEntry(ROOM_DIMENSIONS_AGENT_ID)?.schema
 
-    expect(schema?.safeParse({ kind: 'research', data: [validRoom] }).success).toBe(true)
     expect(schema?.safeParse({ kind: 'research', data: { rooms: [validRoom] } }).success).toBe(
       false,
     )
