@@ -603,6 +603,7 @@
   "resources.messageObjects.resource.title": "Resource",
   "rfq_intake.workflows.commands.deal.advance": "RFQ: przesuń sprawę na etap lejka",
   "rfq_intake.workflows.commands.plans.analyze": "Przeanalizuj rzuty z zapytania",
+  "rfq_intake.workflows.commands.quote.create": "RFQ: utwórz ofertę ze sprawy",
   "rfq_intake.workflows.commands.requirements.match": "Dopasuj wymagania do katalogu",
   "rules.nav.group": "Reguły biznesowe",
   "rules.nav.logs": "Logi",

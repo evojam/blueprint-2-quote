@@ -137,7 +137,7 @@ describe('rfq_intake inbox action registry', () => {
 })
 
 describe('rfq_intake analysis workflow', () => {
-  it('runs catalog matching after page measurements', async () => {
+  it('walks the funnel around the measure-then-match chain and declares no trigger of its own', async () => {
     const { workflowsConfig } = await import('../workflows')
     const workflow = workflowsConfig.workflows.find((entry) => entry.workflowId === 'rfq_intake.analysis')
     expect(workflow).toBeDefined()
@@ -154,17 +154,53 @@ describe('rfq_intake analysis workflow', () => {
     }
 
     expect(definition.interpolation).toBe('strict')
-    expect(definition.steps.map((step) => step.stepType)).toEqual(['START', 'AUTOMATED', 'AUTOMATED', 'AUTOMATED', 'END'])
+    expect(definition.steps.map((step) => step.stepId)).toEqual([
+      'start',
+      'mark_quoting',
+      'extract_pdf',
+      'measure_rooms',
+      'match_catalog',
+      'mark_review',
+      'end',
+    ])
+    expect(definition.steps.map((step) => step.stepType)).toEqual([
+      'START',
+      'AUTOMATED',
+      'AUTOMATED',
+      'AUTOMATED',
+      'AUTOMATED',
+      'AUTOMATED',
+      'END',
+    ])
+
     const activities = definition.steps.flatMap((step) => step.activities ?? [])
-    expect(activities.map((activity) => activity.activityType)).toEqual(['INVOKE_AGENT', 'UPDATE_ENTITY', 'UPDATE_ENTITY'])
+    expect(activities.map((activity) => activity.activityType)).toEqual([
+      'UPDATE_ENTITY',
+      'INVOKE_AGENT',
+      'UPDATE_ENTITY',
+      'UPDATE_ENTITY',
+      'UPDATE_ENTITY',
+    ])
     expect(activities.every((activity) => activity.async !== true)).toBe(true)
-    expect(activities[0]!.config).toMatchObject({
+    // The funnel move runs FIRST and on `{{context.dealId}}`: an operator has to see a
+    // case leave `Nowe zgloszenie` the moment the engine picks it up, and the deal id
+    // only reaches the graph through the process input.
+    expect(activities[0]!.config).toEqual({
+      commandId: 'rfq_intake.deal.advance',
+      input: {
+        tenantId: '{{workflow.tenantId}}',
+        organizationId: '{{workflow.organizationId}}',
+        dealId: '{{context.dealId}}',
+        stage: 'quoting',
+      },
+    })
+    expect(activities[1]!.config).toMatchObject({
       agentId: 'property_documents.pdf_intake',
       input: {
         __files: '{{context.__files}}',
       },
     })
-    expect(activities[1]).toMatchObject({
+    expect(activities[2]).toMatchObject({
       config: {
         commandId: 'rfq_intake.measure-rooms',
         input: {
@@ -176,7 +212,7 @@ describe('rfq_intake analysis workflow', () => {
         },
       },
     })
-    expect(activities[2]).toMatchObject({
+    expect(activities[3]).toMatchObject({
       config: {
         commandId: 'rfq_intake.requirements.match',
         input: {
@@ -187,11 +223,25 @@ describe('rfq_intake analysis workflow', () => {
         },
       },
     })
+    // The closing move, to `Do sprawdzenia`. Both funnel activities go through the same
+    // command with a different `stage`, so the pair is asserted together.
+    expect(activities[4]!.config).toEqual({
+      commandId: 'rfq_intake.deal.advance',
+      input: {
+        tenantId: '{{workflow.tenantId}}',
+        organizationId: '{{workflow.organizationId}}',
+        dealId: '{{context.dealId}}',
+        stage: 'review',
+      },
+    })
+    expect(JSON.stringify(definition)).not.toContain('rfq_intake.plans.analyze')
     expect(definition.transitions).toEqual([
-      { transitionId: 't_start', transitionName: 'Start', fromStepId: 'start', toStepId: 'extract_pdf', trigger: 'auto' },
+      { transitionId: 't_start', transitionName: 'Start', fromStepId: 'start', toStepId: 'mark_quoting', trigger: 'auto' },
+      { transitionId: 't_extract', transitionName: 'Extract', fromStepId: 'mark_quoting', toStepId: 'extract_pdf', trigger: 'auto' },
       { transitionId: 't_measure', transitionName: 'Measure', fromStepId: 'extract_pdf', toStepId: 'measure_rooms', trigger: 'auto' },
       { transitionId: 't_match', transitionName: 'Match', fromStepId: 'measure_rooms', toStepId: 'match_catalog', trigger: 'auto' },
-      { transitionId: 't_done', transitionName: 'Done', fromStepId: 'match_catalog', toStepId: 'end', trigger: 'auto' },
+      { transitionId: 't_review', transitionName: 'Review', fromStepId: 'match_catalog', toStepId: 'mark_review', trigger: 'auto' },
+      { transitionId: 't_done', transitionName: 'Done', fromStepId: 'mark_review', toStepId: 'end', trigger: 'auto' },
     ])
     expect(definition.triggers ?? []).toEqual([])
   })
