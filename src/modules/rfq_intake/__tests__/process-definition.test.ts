@@ -72,6 +72,7 @@ describe('ensureRfqProcessDefinition', () => {
       workflowId: RFQ_ANALYSIS_WORKFLOW_ID,
       enabled: true,
     })
+    expect(rows[0].description).toBe('Reads the RFQ PDF and matches its brief against the catalog.')
     // Without a manual trigger `startProcessExecutionCommand` 403s every hand-start.
     expect(rows[0].triggers).toEqual([{ kind: 'manual', requireFeatures: [] }])
   })
@@ -143,8 +144,7 @@ describe('ensureRfqProcessDefinition', () => {
       workflowId: RFQ_ANALYSIS_WORKFLOW_ID,
       deletedAt: null,
       name: 'RFQ document analysis',
-      description:
-        'Reads the RFQ PDF, measures every floor plan, and matches every requirement against the catalog.',
+      description: 'Reads the RFQ PDF and matches its brief against the catalog.',
       triggers: [{ kind: 'manual', requireFeatures: [] }],
     })
     const { container, markOrmEntityChange } = makeContainer()

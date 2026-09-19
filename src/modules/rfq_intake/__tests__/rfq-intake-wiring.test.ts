@@ -27,7 +27,7 @@ describe('rfq_intake inbox action registry', () => {
 })
 
 describe('rfq_intake analysis workflow', () => {
-  it('chains the three agents and declares no trigger of its own', async () => {
+  it('chains PDF intake directly to catalog matching and declares no trigger of its own', async () => {
     const { workflowsConfig } = await import('../workflows')
     const workflow = workflowsConfig.workflows.find((entry) => entry.workflowId === 'rfq_intake.analysis')
     expect(workflow).toBeDefined()
@@ -36,36 +36,45 @@ describe('rfq_intake analysis workflow', () => {
       interpolation?: string
       steps: Array<{
         stepId: string
+        stepType: string
         activities?: Array<{ activityType: string; config: Record<string, unknown> }>
       }>
+      transitions: Array<{ fromStepId: string; toStepId: string }>
       triggers?: Array<{ eventPattern: string; config?: { contextMapping?: Array<{ targetKey: string }> } }>
     }
 
-    // Lenient interpolation would hand a command the literal "{{context.dealId}}".
     expect(definition.interpolation).toBe('strict')
+    expect(definition.steps.map((step) => step.stepType)).toEqual([
+      'START',
+      'AUTOMATED',
+      'AUTOMATED',
+      'END',
+    ])
 
     const activities = definition.steps.flatMap((step) => step.activities ?? [])
     expect(activities.map((activity) => activity.activityType)).toEqual([
-      'UPDATE_ENTITY',
       'INVOKE_AGENT',
       'UPDATE_ENTITY',
-      'UPDATE_ENTITY',
-      'UPDATE_ENTITY',
     ])
-    // The funnel brackets the work: quoting before the first agent, review after the
-    // last one. A case that never leaves `Nowe zgłoszenie` means the chain never ran.
-    expect(activities[0].config.commandId).toBe('rfq_intake.deal.advance')
-    expect(activities[0].config.input).toMatchObject({ stage: 'quoting' })
-    expect(activities[1].config.agentId).toBe('property_documents.pdf_intake')
-    expect(activities[2].config.commandId).toBe('rfq_intake.plans.analyze')
-    expect(activities[3].config.commandId).toBe('rfq_intake.requirements.match')
-    expect(activities[4].config.commandId).toBe('rfq_intake.deal.advance')
-    expect(activities[4].config.input).toMatchObject({ stage: 'review' })
-
-    // No trigger of its own, deliberately. The entry point is the orchestrator process
-    // definition (`lib/startProcess.ts`); an embedded event trigger would start a
-    // SECOND instance per RFQ, and that one would carry no acting user, so it could
-    // not execute a single step.
+    expect(activities[0]!.config).toMatchObject({
+      agentId: 'property_documents.pdf_intake',
+    })
+    expect(activities[1]!.config).toEqual({
+      commandId: 'rfq_intake.requirements.match',
+      input: {
+        tenantId: '{{workflow.tenantId}}',
+        organizationId: '{{workflow.organizationId}}',
+        workflowInstanceId: '{{workflow.instanceId}}',
+        stepId: 'match_catalog',
+      },
+    })
+    expect(JSON.stringify(definition)).not.toContain('rfq_intake.deal.advance')
+    expect(JSON.stringify(definition)).not.toContain('rfq_intake.plans.analyze')
+    expect(definition.transitions).toEqual([
+      { transitionId: 't_start', transitionName: 'Start', fromStepId: 'start', toStepId: 'extract_pdf', trigger: 'auto' },
+      { transitionId: 't_match', transitionName: 'Match', fromStepId: 'extract_pdf', toStepId: 'match_catalog', trigger: 'auto' },
+      { transitionId: 't_done', transitionName: 'Done', fromStepId: 'match_catalog', toStepId: 'end', trigger: 'auto' },
+    ])
     expect(definition.triggers ?? []).toEqual([])
   })
 
