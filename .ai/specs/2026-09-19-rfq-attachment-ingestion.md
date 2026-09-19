@@ -152,12 +152,10 @@ Resend SDK 6.28.0, already a dependency via `@open-mercato/channel-resend`:
 
 ## 📝 Risks & Impact Review
 
-**Unverified premise, and the reason for Phase 0.** The SDK's *types* promise these
-endpoints; nobody has confirmed that the configured Resend account can call them, or
-that Resend retains attachment bytes for this inbound domain at all. If it does not,
-this design is void and the fallback is a manual PDF upload on the case. One
-`receiving.list()` call settles it, and it must happen before any module code is
-written.
+**~~Unverified premise~~ — settled, green.** The concern was that the SDK's *types*
+promise these endpoints while the account might not serve them. Phase 0 proved it does:
+attachments are present and their bytes download. Recorded because the design would have
+been void otherwise, and because "the types say so" was never evidence.
 
 Because the key lives in the integration rather than the environment, the probe reads it
 the same way the feature will — through `integrationCredentialsService` against the
@@ -175,9 +173,12 @@ writer. `BACKWARD_COMPATIBILITY.md` is therefore not engaged.
 
 ## 📋 Phasing
 
-- **Phase 0 — prove the provider path.** Throwaway script against demo: does
-  `receiving.list()` return our RFQ, and does it carry attachments with a working
-  `download_url`? Go/no-go for everything below.
+- **Phase 0 — prove the provider path. DONE, green (2026-09-19).** Against the demo
+  Resend account: `receiving.list()` returns 8 inbound e-mails including our RFQs, each
+  carrying `Brief remontu dom.pdf` (`application/pdf`, 561094 B) with a real attachment
+  UUID. The signed URL resolved and `GET 200` returned `bytes=561094`, magic
+  `%PDF-1.4` — the declared size to the byte, and a genuine PDF header. The premise the
+  whole design rests on is evidence now, not a type signature.
 - **Phase 1 — fetch and store.** The Resend client and the store-into-attachments step,
   behind a unit-tested seam.
 - **Phase 2 — wire into the subscriber.** Replace the bail-out with the lazy pull; keep
