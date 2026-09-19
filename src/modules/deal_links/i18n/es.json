@@ -1,0 +1,8 @@
+{
+  "deal_links.kind.order": "Order",
+  "deal_links.kind.quote": "Quote",
+  "deal_links.state.empty": "No quote has been produced for this case yet.",
+  "deal_links.state.error": "Could not load the linked documents.",
+  "deal_links.state.loading": "Loading…",
+  "deal_links.tab.label": "Quote"
+}

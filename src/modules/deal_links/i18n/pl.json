@@ -1,0 +1,8 @@
+{
+  "deal_links.kind.order": "Zamówienie",
+  "deal_links.kind.quote": "Wycena",
+  "deal_links.state.empty": "Do tej sprawy nie powstała jeszcze żadna wycena.",
+  "deal_links.state.error": "Nie udało się wczytać powiązanych dokumentów.",
+  "deal_links.state.loading": "Wczytywanie…",
+  "deal_links.tab.label": "Wycena"
+}
