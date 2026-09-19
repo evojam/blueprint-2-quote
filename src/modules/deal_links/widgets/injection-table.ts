@@ -32,6 +32,31 @@ export const injectionTable: ModuleInjectionTable = {
       priority: -10,
     },
   ],
+
+  // `sales.document.detail.{kind}:tabs` IS declared — `sales/extension-points.ts:21-30`
+  // publishes it with `kind: ^(order|quote)$` and `surface: ^(tabs|details)$`, and
+  // `sales/backend/sales/documents/[id]/page.tsx:4002` resolves and reads it. Unlike
+  // the customers spot above, this one is a published host, and it translates
+  // `groupLabel` through `t()` (`page.tsx:4016`), so the label below is an i18n key
+  // rather than a literal.
+  'sales.document.detail.quote:tabs': [
+    {
+      widgetId: 'deal_links.injection.document-deals',
+      kind: 'tab',
+      groupId: 'document-deals',
+      groupLabel: 'deal_links.documentTab.label',
+      priority: -10,
+    },
+  ],
+  'sales.document.detail.order:tabs': [
+    {
+      widgetId: 'deal_links.injection.document-deals',
+      kind: 'tab',
+      groupId: 'document-deals',
+      groupLabel: 'deal_links.documentTab.label',
+      priority: -10,
+    },
+  ],
 }
 
 export default injectionTable
