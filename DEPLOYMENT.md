@@ -447,6 +447,21 @@ that dies stops the task, which surfaces on the app container as SIGKILL / exit 
 as a failed migration. Non-essential also keeps an agent-plane failure from cycling the app
 service in normal operation.
 
+The same "starts the whole definition" rule hits the **worker** container, and there the answer
+is different because it stays `"essential": true`. Without an override it runs its default
+`mercato queue worker --all`, so every migration boots a second full 30-queue worker beside the
+service's own: two pools each sized to the whole DB connection budget (50), jobs claimed off the
+shared Redis queues and killed when the task ends, and a log banner identical to the service
+worker's in the same log group. Override its command instead:
+
+```json
+{"name": "worker", "command": ["sh", "-c", "sleep infinity"]}
+```
+
+Not `["true"]` — `run-task` cannot override essentiality, so a worker that exits stops the task
+and the deploy reads as a failed migration. The container has to stay up and idle; the `app`
+container exiting is what ends the task.
+
 ### Where the sandbox actually runs
 
 Worth stating because the name misleads: the `isolated-vm` sandbox that executes skill
