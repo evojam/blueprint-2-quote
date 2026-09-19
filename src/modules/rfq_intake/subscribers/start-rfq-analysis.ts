@@ -1,6 +1,11 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
-import { InboxEmail, InboxProposal } from '@open-mercato/core/modules/inbox_ops/data/entities'
-import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
+import { Attachment } from '@open-mercato/core/modules/attachments/data/entities'
+import {
+  InboxEmail,
+  InboxProposal,
+  InboxProposalAction,
+} from '@open-mercato/core/modules/inbox_ops/data/entities'
+import { findOneWithDecryption, findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { createLogger } from '@open-mercato/shared/lib/logger'
 import { emitRfqIntakeEvent } from '../events'
 import { startRfqAnalysisProcess } from '../lib/startProcess'
@@ -48,7 +53,10 @@ export type RfqCreatedEvent = {
    * a run without an actor cannot execute a single step.
    */
   userId: string
-  __files: { attachments: Array<{ attachmentId: string }> }
+  /** The one document the chain analyses: the first PDF among the e-mail's attachments. */
+  attachmentId: string
+  customerId: string | null
+  channelId: string | null
 }
 
 type SubscriberContext = {
@@ -72,6 +80,84 @@ export function isRfqActionExecuted(payload: ActionExecutedPayload): boolean {
     payload?.createdEntityType === 'customer_deal' &&
     Boolean(trimmed(payload?.createdEntityId))
   )
+}
+
+const PDF_MIME_TYPE = 'application/pdf'
+
+/**
+ * The ONE document the chain analyses: the first PDF among the e-mail's attachments.
+ *
+ * Not a simplification we chose freely — `pdf_intake` enforces it server-side. Its
+ * tool counts the files staged into the run sandbox and refuses anything but exactly
+ * one (`property_documents/ai-tools.ts:345`, `invalid_attachment_count`), and it
+ * counts FILES, not PDFs: a signature logo staged next to the brief breaks the run
+ * just as a second brief would.
+ *
+ * HACK(hackathon): "first" is the e-mail's own attachment order, and a second PDF is
+ * dropped with nothing but a log line. An RFQ that splits its brief across two
+ * documents silently gets half an analysis.
+ *
+ * Resolved through the attachments module rather than trusted from the id list: the
+ * mime type is what makes a PDF a PDF, and only the Attachment row knows it. Scoped
+ * to tenant AND organization, so an id that does not resolve here counts as absent.
+ */
+async function pickFirstPdfAttachmentId(
+  em: EntityManager,
+  scope: { tenantId: string; organizationId: string },
+  attachmentIds: string[],
+): Promise<string | null> {
+  const rows = await findWithDecryption(
+    em,
+    Attachment,
+    // No soft-delete filter: `Attachment` carries no `deletedAt` — removal is a real
+    // delete plus the storage driver's own cleanup.
+    { id: { $in: attachmentIds }, ...scope },
+    undefined,
+    scope,
+  )
+  const pdfIds = new Set(
+    rows
+      .filter((row) => (row.mimeType ?? '').trim().toLowerCase() === PDF_MIME_TYPE)
+      .map((row) => String(row.id)),
+  )
+  // Ordered by the e-mail, not by the query: `$in` guarantees no ordering, and "the
+  // first attachment" has to mean the same thing on every run.
+  return attachmentIds.find((id) => pdfIds.has(id)) ?? null
+}
+
+/**
+ * The CRM facets the agent step passes on: who the RFQ is for, and through which
+ * sales channel.
+ *
+ * Both are read off the executed action's own payload. `enrichOrderPayload` resolves
+ * them SERVER-side during extraction and writes the enriched payload back onto the
+ * action row (`inbox_ops/subscribers/extractionWorker.ts:271-281`), so this is the
+ * enrichment's own answer rather than anything the model invented.
+ *
+ * HACK(hackathon): `customerId` is the contact the EXTRACTION matched. When no
+ * contact matched and our action created one through `ensureContact`, the payload
+ * still holds null and the agent gets null — the deal has the right contact, this
+ * field does not. Carrying it out of `execute` needs a channel the installed
+ * `InboxActionExecutionResult` does not have.
+ */
+async function resolveCrmFacets(
+  em: EntityManager,
+  scope: { tenantId: string; organizationId: string },
+  actionId: string | null,
+): Promise<{ customerId: string | null; channelId: string | null }> {
+  if (!actionId) return { customerId: null, channelId: null }
+  const action = await findOneWithDecryption(
+    em,
+    InboxProposalAction,
+    { id: actionId, ...scope, deletedAt: null },
+    undefined,
+    scope,
+  )
+  const actionPayload = (action?.payload ?? {}) as Record<string, unknown>
+  return {
+    customerId: trimmed(actionPayload.customerEntityId),
+    channelId: trimmed(actionPayload.channelId),
+  }
 }
 
 export default async function handler(
@@ -135,15 +221,34 @@ export default async function handler(
   )
 
   if (attachmentIds.length === 0) {
-    // Not a failure: the case is open and useful. Say so rather than letting the
-    // absent analysis look like a silent success.
-    logger.info('RFQ has no attachments; the case is open but no document analysis starts', {
+    // HACK(hackathon): today this branch is not the exception, it is EVERY RFQ that
+    // arrives by e-mail. `inbox_emails.attachment_ids` is a column nothing writes:
+    // the installed module declares it (`inbox_ops/data/entities.ts:178`) and
+    // projects it in the emails API, but neither route that creates an InboxEmail
+    // sets it and `parseInboundEmail` never looks at attachments. The real fix is at
+    // ingestion — persist the inbound files as scoped Attachment rows and write their
+    // ids here. Warn, not info: "no attachments" currently means "the feature did not
+    // run", not "this e-mail happened to carry no document".
+    logger.warn('RFQ has no attachments; the case is open but no document analysis starts', {
       dealId,
       proposalId,
       emailId: proposal.inboxEmailId,
     })
     return
   }
+
+  const attachmentId = await pickFirstPdfAttachmentId(em, scope, attachmentIds)
+  if (!attachmentId) {
+    logger.warn('RFQ carries attachments but none of them is a PDF; no document analysis starts', {
+      dealId,
+      proposalId,
+      emailId: proposal.inboxEmailId,
+      attachments: attachmentIds.length,
+    })
+    return
+  }
+
+  const { customerId, channelId } = await resolveCrmFacets(em, scope, trimmed(payload.actionId))
 
   const event: RfqCreatedEvent = {
     dealId,
@@ -152,7 +257,9 @@ export default async function handler(
     tenantId,
     organizationId,
     userId,
-    __files: { attachments: attachmentIds.map((attachmentId) => ({ attachmentId })) },
+    attachmentId,
+    customerId,
+    channelId,
   }
 
   // Announced, not dispatched. The chain no longer hangs off this event — it is a
@@ -169,7 +276,9 @@ export default async function handler(
       dealId,
       proposalId,
       emailId: proposal.inboxEmailId,
-      __files: event.__files,
+      attachmentId,
+      customerId,
+      channelId,
     },
   )
   if (!started) {

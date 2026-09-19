@@ -3,12 +3,14 @@ import { beforeEach, describe, expect, it, jest } from '@jest/globals'
 const emitRfqIntakeEvent = jest.fn<(...args: any[]) => Promise<void>>()
 const startRfqAnalysisProcess = jest.fn<(...args: any[]) => Promise<any>>()
 const findOneWithDecryption = jest.fn<(...args: any[]) => Promise<any>>()
+const findWithDecryption = jest.fn<(...args: any[]) => Promise<any[]>>()
 
 jest.mock('../events', () => ({
   emitRfqIntakeEvent: (...args: any[]) => emitRfqIntakeEvent(...args),
 }))
 jest.mock('@open-mercato/shared/lib/encryption/find', () => ({
   findOneWithDecryption: (...args: any[]) => findOneWithDecryption(...args),
+  findWithDecryption: (...args: any[]) => findWithDecryption(...args),
 }))
 jest.mock('../lib/startProcess', () => ({
   startRfqAnalysisProcess: (...args: any[]) => startRfqAnalysisProcess(...args),
@@ -25,8 +27,12 @@ const USER = '44444444-4444-4444-8444-444444444444'
 // paths touches the fork, because every read goes through the mocked finder.
 const ctx = { resolve: () => ({ fork: () => ({}) }) } as unknown as Parameters<typeof handler>[1]
 
+const CUSTOMER = '55555555-5555-4555-8555-555555555555'
+const CHANNEL = '66666666-6666-4666-8666-666666666666'
+
 function executedAction(overrides: Partial<ActionExecutedPayload> = {}): ActionExecutedPayload {
   return {
+    actionId: 'action-1',
     actionType: 'create_quote',
     createdEntityType: 'customer_deal',
     createdEntityId: DEAL,
@@ -44,10 +50,17 @@ describe('start-rfq-analysis', () => {
     startRfqAnalysisProcess.mockReset()
     startRfqAnalysisProcess.mockResolvedValue({ started: true })
     findOneWithDecryption.mockReset()
-    // Proposal first, then the e-mail behind it.
+    // Proposal, then the e-mail behind it, then the executed action row the CRM
+    // facets are read from.
     findOneWithDecryption
       .mockResolvedValueOnce({ id: 'proposal-1', inboxEmailId: 'email-1' })
       .mockResolvedValueOnce({ id: 'email-1', attachmentIds: ['attachment-1'] })
+      .mockResolvedValueOnce({
+        id: 'action-1',
+        payload: { customerEntityId: CUSTOMER, channelId: CHANNEL },
+      })
+    findWithDecryption.mockReset()
+    findWithDecryption.mockResolvedValue([{ id: 'attachment-1', mimeType: 'application/pdf' }])
   })
 
   /**
@@ -79,9 +92,67 @@ describe('start-rfq-analysis', () => {
     const [, , scope, userId, input] = startRfqAnalysisProcess.mock.calls[0] as any[]
     expect(scope).toEqual({ tenantId: TENANT, organizationId: ORG })
     expect(userId).toBe(USER)
-    expect(input).toMatchObject({ dealId: DEAL, proposalId: 'proposal-1', emailId: 'email-1' })
-    // Without `__files` the agent has no document to read.
-    expect(input.__files.attachments).toEqual([{ attachmentId: 'attachment-1' }])
+    // Flat start context: the agent step builds the runtime's `__files` envelope from
+    // `attachmentId` itself, so nothing here carries transport shape. Every key the
+    // workflow interpolates must be present — interpolation is strict.
+    expect(input).toEqual({
+      dealId: DEAL,
+      proposalId: 'proposal-1',
+      emailId: 'email-1',
+      attachmentId: 'attachment-1',
+      customerId: CUSTOMER,
+      channelId: CHANNEL,
+    })
+  })
+
+  /**
+   * `pdf_intake` refuses anything but exactly one staged file, so a logo in the
+   * signature must not travel with the brief.
+   */
+  it('picks the first PDF and leaves every other attachment behind', async () => {
+    findOneWithDecryption.mockReset()
+    findOneWithDecryption
+      .mockResolvedValueOnce({ id: 'proposal-1', inboxEmailId: 'email-1' })
+      .mockResolvedValueOnce({ id: 'email-1', attachmentIds: ['logo-1', 'brief-1', 'brief-2'] })
+      .mockResolvedValueOnce({ id: 'action-1', payload: {} })
+    // Deliberately out of e-mail order: `$in` guarantees none, so the pick must come
+    // from the e-mail's own list.
+    findWithDecryption.mockResolvedValue([
+      { id: 'brief-2', mimeType: 'application/pdf' },
+      { id: 'logo-1', mimeType: 'image/png' },
+      { id: 'brief-1', mimeType: 'application/pdf' },
+    ])
+
+    await handler(executedAction(), ctx)
+
+    const [, , , , input] = startRfqAnalysisProcess.mock.calls[0] as any[]
+    expect(input.attachmentId).toBe('brief-1')
+  })
+
+  it('carries a null customer and channel rather than dropping the keys', async () => {
+    findOneWithDecryption.mockReset()
+    findOneWithDecryption
+      .mockResolvedValueOnce({ id: 'proposal-1', inboxEmailId: 'email-1' })
+      .mockResolvedValueOnce({ id: 'email-1', attachmentIds: ['attachment-1'] })
+      .mockResolvedValueOnce({ id: 'action-1', payload: {} })
+
+    await handler(executedAction(), ctx)
+
+    const [, , , , input] = startRfqAnalysisProcess.mock.calls[0] as any[]
+    // Present with a null value: strict interpolation fails on a missing KEY, not on
+    // a null one, so the step must still be able to resolve both tokens.
+    expect(input).toMatchObject({ customerId: null, channelId: null })
+    expect('customerId' in input).toBe(true)
+    expect('channelId' in input).toBe(true)
+  })
+
+  it('opens the case without an analysis when no attachment is a PDF', async () => {
+    findWithDecryption.mockResolvedValue([{ id: 'attachment-1', mimeType: 'image/png' }])
+
+    await handler(executedAction(), ctx)
+
+    expect(emitRfqIntakeEvent).not.toHaveBeenCalled()
+    expect(startRfqAnalysisProcess).not.toHaveBeenCalled()
   })
 
   it('reports a case whose process could not start instead of failing silently', async () => {

@@ -57,7 +57,46 @@ const rfqAnalysis = defineWorkflow({
           async: false,
           config: {
             agentId: PDF_AGENT_ID,
-            input: {},
+            // The agent's input is EXACTLY this config's `input` — nothing merges the
+            // workflow context into it. `invokeAgentConfigSchema` defaults the key to
+            // `{}` (`activity-config-schemas.ts:155`), `interpolateActivityConfig` only
+            // substitutes tokens, and the value then travels unchanged through the job
+            // (`activity-executor.ts:1533`), the worker (`activity-worker-handler.ts:491`),
+            // the bridge and `agentRuntime.run` to the runner. So whatever the agent is
+            // to receive has to be named right here.
+            //
+            // `dealId` and `attachmentId` are the business input: one case, one
+            // document. `__files` repeats that same id because it is NOT ours to
+            // choose — it is the runtime's reserved envelope, and the only thing that
+            // stages the file. `extractFileInput` (`runtime/fileInput.ts:37-45`) pulls
+            // that key out, `stageAttachments` resolves it under tenant+org scope and
+            // writes the bytes into the run sandbox; everything else stays business
+            // data. Drop the envelope and the flat id becomes a string the model can
+            // read but no file it can open, and `pdf_intake` fails with
+            // `invalid_attachment_count` on zero staged files
+            // (`property_documents/ai-tools.ts:345`).
+            //
+            // Strict interpolation, so a start context missing either id fails the
+            // step instead of passing the raw token through.
+            //
+            // `__files` keeps its `attachments: [...]` shape because the envelope
+            // schema is `.strict()` (`runtime/fileInput.ts:11-27`): a `{ attachmentId }`
+            // directly under `__files` fails `safeParse`, and the failure is SILENT —
+            // `extractFileInput` returns `files: null`, the run succeeds and stages
+            // nothing. One entry in the array is the "exactly one document" rule.
+            //
+            // `currency` is a literal: this demo prices in PLN and an unresolved
+            // `{{context.currency}}` would fail the step for a value we already know.
+            input: {
+              dealId: '{{context.dealId}}',
+              customerId: '{{context.customerId}}',
+              channelId: '{{context.channelId}}',
+              currency: 'PLN',
+              __files: { attachments: [{ attachmentId: '{{context.attachmentId}}' }] },
+            },
+            // `pdf_intake` is an artifact agent: it raises no proposal, so there is
+            // nothing for a human to dispose of and a threshold of 0 states that
+            // plainly. The review gate belongs on the pricing step, not here.
             onResult: { autoApproveThreshold: 0 },
           },
         },

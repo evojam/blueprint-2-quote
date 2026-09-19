@@ -59,6 +59,17 @@ describe('rfq_intake analysis workflow', () => {
     expect(activities[0]!.config).toMatchObject({
       agentId: 'property_documents.pdf_intake',
     })
+    // Nothing merges the workflow context into an agent's input — the activity config
+    // IS the input. Without this key the file agent is invoked with no document and
+    // `extractFileInput` reports no files rather than failing, so the run looks fine
+    // and produces nothing.
+    expect(activities[0]!.config.input).toEqual({
+      dealId: '{{context.dealId}}',
+      customerId: '{{context.customerId}}',
+      channelId: '{{context.channelId}}',
+      currency: 'PLN',
+      __files: { attachments: [{ attachmentId: '{{context.attachmentId}}' }] },
+    })
     expect(activities[1]!.config).toEqual({
       commandId: 'rfq_intake.requirements.match',
       input: {
@@ -75,6 +86,11 @@ describe('rfq_intake analysis workflow', () => {
       { transitionId: 't_match', transitionName: 'Match', fromStepId: 'extract_pdf', toStepId: 'match_catalog', trigger: 'auto' },
       { transitionId: 't_done', transitionName: 'Done', fromStepId: 'match_catalog', toStepId: 'end', trigger: 'auto' },
     ])
+
+    // No trigger of its own, deliberately. The entry point is the orchestrator process
+    // definition (`lib/startProcess.ts`); an embedded event trigger would start a
+    // SECOND instance per RFQ, and that one would carry no acting user, so it could
+    // not execute a single step.
     expect(definition.triggers ?? []).toEqual([])
   })
 
