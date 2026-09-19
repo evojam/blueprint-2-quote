@@ -247,7 +247,7 @@ export type RoomMeasurementsResult = {
 export type ItemWarning = {
   itemIndex: number
   catalogProductId: string
-  code: ProductFailureCode | PriceFailureCode | QuantityFailureCode | 'unit_mismatch' | 'currency_outlier_dropped'
+  code: ProductFailureCode | PriceFailureCode | QuantityFailureCode | 'unit_mismatch' | 'currency_unsupported'
 }
 
 export function formatWarning(warning: ItemWarning): string {

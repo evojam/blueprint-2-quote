@@ -1,12 +1,23 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
-import { CustomerDeal } from '@open-mercato/core/modules/customers/data/entities'
+import {
+  CustomerDeal,
+  CustomerDealCompanyLink,
+  CustomerDealPersonLink,
+} from '@open-mercato/core/modules/customers/data/entities'
 import { AgentRun } from '@open-mercato/enterprise/modules/agent_orchestrator/data/entities'
 import type { CommandHandler, CommandRuntimeContext } from '@open-mercato/shared/lib/commands'
 import { registerCommand } from '@open-mercato/shared/lib/commands'
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import { z } from 'zod'
 
-import type { RoomMeasurementsResult } from '../lib/quoteContracts'
+import { resolveQuantity } from '../lib/basisResolver'
+import { loadQuotableProduct, resolveUnitPrice } from '../lib/catalogPricing'
+import { runCommand } from '../lib/commandBus'
+import { roundToTwo } from '../lib/geometry'
+import type { QuotableProduct, Quantity, RoomMeasurementsResult } from '../lib/quoteContracts'
+
+/** Quotes are issued in złoty; the seeded catalog prices in nothing else. */
+export const QUOTE_CURRENCY = 'PLN'
 
 /** The only agent whose run may be quoted from. */
 export const ROOM_MEASUREMENTS_AGENT_ID = 'property_documents.room_measurements'
@@ -150,13 +161,159 @@ const createQuoteCommand: CommandHandler<Record<string, unknown>, QuoteCreateRes
 
     // Loaded before any item is considered: an unusable run is a failure of the whole
     // request, not of one line, so it aborts rather than producing warnings.
-    await loadRoomMeasurements(em, scope, input.roomMeasurementsRunId)
+    const measurements = await loadRoomMeasurements(em, scope, input.roomMeasurementsRunId)
 
-    // HACK(hackathon): plumbing only. PR 4 of the plan replaces this with resolved
-    // quantities, prices and the `sales.quotes.create` call. What breaks until then:
-    // the command validates and authorises everything but never produces a quote.
-    return { quoteId: null, lineCount: 0, warnings: ['quote_creation_not_implemented'] }
+    const warnings: string[] = []
+    const resolved: ResolvedItem[] = []
+
+    // Pass one: identity, quantity and the unit gate. Every refusal drops one item and
+    // lets the rest through, because a single bad mapping should not cost the operator
+    // the whole quote.
+    for (const [index, item] of input.items.entries()) {
+      const product = await loadQuotableProduct(em, scope, {
+        productId: item.catalogProductId,
+        ...(item.variantId ? { variantId: item.variantId } : {}),
+      })
+      if (!product.ok) {
+        warnings.push(`${product.code}:${index}`)
+        continue
+      }
+
+      const quantity = resolveQuantity(measurements, {
+        basis: item.basis,
+        ...('roomIds' in item ? { roomIds: item.roomIds } : {}),
+        ...('count' in item ? { count: item.count } : {}),
+        ...('given' in item ? { given: item.given } : {}),
+      })
+      if (!quantity.ok) {
+        warnings.push(`${quantity.code}:${index}`)
+        continue
+      }
+
+      // The gate the whole design exists for: a basis that produced m² cannot bill a
+      // product sold by the piece. Checked before pricing, so a wrong mapping never
+      // reaches the price tables.
+      if (quantity.value.unit !== product.value.defaultUnit) {
+        warnings.push(`unit_mismatch:${index}`)
+        continue
+      }
+
+      resolved.push({ index, product: product.value, quantity: quantity.value, note: item.note })
+    }
+
+    // Pass two: group before pricing. `resolvePrice` is quantity-dependent and Catalog
+    // prices carry `minQuantity` tiers, so two items naming one product must be priced
+    // on their sum — the customer is buying twenty metres, not eight and twelve.
+    const groups = new Map<string, ItemGroup>()
+    for (const entry of resolved) {
+      const key = `${entry.product.productId}:${entry.product.variantId}`
+      const existing = groups.get(key)
+      if (existing) {
+        existing.quantity = roundToTwo(existing.quantity + entry.quantity.quantity)
+        existing.indices.push(entry.index)
+        if (entry.note) existing.notes.push(entry.note)
+      } else {
+        groups.set(key, {
+          product: entry.product,
+          unit: entry.quantity.unit,
+          quantity: entry.quantity.quantity,
+          indices: [entry.index],
+          notes: entry.note ? [entry.note] : [],
+        })
+      }
+    }
+
+    // Pass three: one price per group, at the summed quantity.
+    const priced: PricedGroup[] = []
+    for (const group of groups.values()) {
+      const price = await resolveUnitPrice(em, ctx.container, scope, {
+        productId: group.product.productId,
+        variantId: group.product.variantId,
+        quantity: group.quantity,
+      })
+      if (!price.ok) {
+        for (const index of group.indices) warnings.push(`${price.code}:${index}`)
+        continue
+      }
+      priced.push({ group, price: price.value })
+    }
+
+    // One currency, fixed. The seeded catalog prices in złoty and the renovation
+    // business is domestic, so a line priced in anything else is a catalog mistake to
+    // surface rather than a rate to convert. Refusing it by name beats a majority vote,
+    // which would silently drop whichever side happened to be outnumbered.
+    const kept: PricedGroup[] = []
+    for (const entry of priced) {
+      if (entry.price.currencyCode === QUOTE_CURRENCY) kept.push(entry)
+      else for (const index of entry.group.indices) warnings.push(`currency_unsupported:${index}`)
+    }
+
+    if (kept.length === 0) {
+      return { quoteId: null, lineCount: 0, warnings }
+    }
+
+    const lines = kept.map(({ group, price }) => ({
+      kind: 'service' as const,
+      productId: group.product.productId,
+      productVariantId: group.product.variantId,
+      name: group.product.title,
+      ...(group.notes.length ? { description: group.notes.join(', ').slice(0, 4000) } : {}),
+      quantity: group.quantity,
+      quantityUnit: group.unit,
+      currencyCode: price.currencyCode,
+      unitPriceGross: price.unitPriceGross,
+      // The rate that produced the gross amount. `taxRateId` is a catalog fact and is
+      // only attached when the product side actually names one.
+      ...(price.taxRate ? { taxRate: price.taxRate } : {}),
+      ...(group.product.taxRateId ? { taxRateId: group.product.taxRateId } : {}),
+      priceMode: 'gross' as const,
+    }))
+
+    const customerEntityId = await resolveQuoteCustomer(em, input.dealId)
+
+    const created = await runCommand<Record<string, unknown>, { quoteId?: string }>(
+      ctx,
+      'sales.quotes.create',
+      {
+        ...scope,
+        currencyCode: QUOTE_CURRENCY,
+        ...(customerEntityId ? { customerEntityId } : {}),
+        metadata: {
+          rfqDealId: input.dealId,
+          roomMeasurementsRunId: input.roomMeasurementsRunId,
+          source: 'rfq_intake',
+        },
+        lines,
+      },
+    )
+
+    return { quoteId: created?.quoteId ?? null, lineCount: lines.length, warnings }
   },
+}
+
+type ResolvedItem = { index: number; product: QuotableProduct; quantity: Quantity; note?: string }
+type ItemGroup = {
+  product: QuotableProduct
+  unit: Quantity['unit']
+  quantity: number
+  indices: number[]
+  notes: string[]
+}
+type PricedGroup = { group: ItemGroup; price: { currencyCode: string; unitPriceGross: string; taxRate: string | null } }
+
+/**
+ * A renovation quote is addressed to the company when the deal names one, and to its
+ * primary contact otherwise. Neither link table carries its own scope — both hang off
+ * the deal, which was already proven in scope above.
+ */
+async function resolveQuoteCustomer(em: EntityManager, dealId: string): Promise<string | null> {
+  const company = await em.findOne(CustomerDealCompanyLink, { deal: dealId })
+  if (company?.company) return typeof company.company === 'string' ? company.company : company.company.id
+
+  const person = await em.findOne(CustomerDealPersonLink, { deal: dealId, isPrimary: true })
+  if (person?.person) return typeof person.person === 'string' ? person.person : person.person.id
+
+  return null
 }
 
 registerCommand(createQuoteCommand)
