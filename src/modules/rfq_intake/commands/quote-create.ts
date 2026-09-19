@@ -4,6 +4,7 @@ import {
   CustomerDealCompanyLink,
   CustomerDealPersonLink,
 } from '@open-mercato/core/modules/customers/data/entities'
+import { resolveStatusEntryIdByValue } from '@open-mercato/core/modules/sales/lib/statusHelpers'
 import { AgentRun } from '@open-mercato/enterprise/modules/agent_orchestrator/data/entities'
 import type { CommandHandler, CommandRuntimeContext } from '@open-mercato/shared/lib/commands'
 import { registerCommand } from '@open-mercato/shared/lib/commands'
@@ -15,6 +16,14 @@ import { loadQuotableProduct, resolveUnitPrice } from '../lib/catalogPricing'
 import { runCommand } from '../lib/commandBus'
 import { roundToTwo } from '../lib/geometry'
 import type { QuotableProduct, Quantity, RoomMeasurementsResult } from '../lib/quoteContracts'
+
+/**
+ * The status a machine-made quote starts in. `draft` is Sales' own vocabulary, not ours:
+ * `sales.quotes.update` writes exactly this value when an edit invalidates a sent quote,
+ * and `sales/api/quotes/send` replaces it with `sent`. Setting it here only supplies the
+ * starting point of a cycle Sales already owns.
+ */
+export const QUOTE_DRAFT_STATUS = 'draft'
 
 /** Quotes are issued in złoty; the seeded catalog prices in nothing else. */
 export const QUOTE_CURRENCY = 'PLN'
@@ -271,12 +280,24 @@ const createQuoteCommand: CommandHandler<Record<string, unknown>, QuoteCreateRes
 
     const customerEntityId = await resolveQuoteCustomer(em, input.dealId)
 
+    // Resolved through the same helper the send route uses, so both ends of the cycle
+    // agree on which entry `draft` means. It returns null when the `sales.order_status`
+    // dictionary or the entry is absent — an organisation that never ran
+    // `mercato sales seed-statuses` gets a quote with no status label rather than a
+    // failed request. Unsent remains the readiness signal either way.
+    const statusEntryId = await resolveStatusEntryIdByValue(em, {
+      tenantId: scope.tenantId,
+      organizationId: scope.organizationId,
+      value: QUOTE_DRAFT_STATUS,
+    })
+
     const created = await runCommand<Record<string, unknown>, { quoteId?: string }>(
       ctx,
       'sales.quotes.create',
       {
         ...scope,
         currencyCode: QUOTE_CURRENCY,
+        ...(statusEntryId ? { statusEntryId } : {}),
         ...(customerEntityId ? { customerEntityId } : {}),
         metadata: {
           rfqDealId: input.dealId,
