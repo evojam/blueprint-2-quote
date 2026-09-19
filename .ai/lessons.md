@@ -28,4 +28,4 @@ rg -l '"<area>"|"<module>"|"<topic>"' .ai/lessons/*.md
 
 ### ai-workflow
 
-- [Carry file-agent options through runtime and policy generation](lessons/file-agent-options-need-runtime-and-policy.md) — area:ai-workflow,framework-context; module:agent_orchestrator,property_documents; topic:file-agents,generated-files,version-skew,manifest-validation,artifact-outcomes
+- [Carry file-agent options through runtime and policy generation](lessons/file-agent-options-need-runtime-and-policy.md) — area:ai-workflow,framework-context; module:agent_orchestrator,property_documents; topic:file-agents,generated-files,version-skew,manifest-validation,artifact-outcomes,image-vision,bundle-cache

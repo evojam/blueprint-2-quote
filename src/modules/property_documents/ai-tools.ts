@@ -23,6 +23,9 @@ import type {
 export const PDF_AGENT_ID = 'property_documents.pdf_intake'
 export const PDF_TEXT_READER_AGENT_ID = 'property_documents.pdf_text_reader'
 export const PDF_TOOL_ID = 'property_documents.process_pdf'
+export const ROOM_DIMENSIONS_AGENT_ID = 'property_documents.room_dimensions'
+export const ROOM_DIMENSIONS_TOOL_ID = 'property_documents.extract_room_dimensions'
+export const ROOM_DIMENSIONS_VISION_SERVICE = 'propertyRoomDimensionsVisionService' as const
 export const MAX_PDF_PAGES = 48
 export const MAX_PDF_ARTIFACTS = 50
 
@@ -34,6 +37,7 @@ const INSPECTION_FILE = '.inspection.json'
 const EXEC_TIMEOUT_MS = 60_000
 const OPENCODE_PROJECT_ROOT = '/home/opencode'
 const EXEC_MAX_BUFFER = 1024 * 1024
+const MAX_ROOM_IMAGE_BYTES = 20 * 1024 * 1024
 
 const pageNumberSchema = z.number().int().min(1).max(MAX_PDF_PAGES)
 const sortedPageListSchema = z
@@ -63,6 +67,37 @@ const briefSourceSchema = sourceSchema
   .strict()
 const warningSchema = z.string().min(1).max(1_000)
 const nullableBoundedString = (max: number) => z.string().max(max).nullable()
+
+export const roomDimensionSchema = z
+  .object({
+    value: z.number().finite(),
+    unit: z.enum(['mm', 'cm', 'm', 'in', 'ft']).nullable(),
+    orientation: z.enum(['horizontal', 'vertical', 'height', 'unknown']),
+    kind: z.enum(['linear', 'ceiling_height', 'unknown']),
+    sourceText: z.string().min(1),
+    confidence: z.number().finite().min(0).max(1),
+  })
+  .strict()
+
+export const roomDimensionsVisionResultSchema = z
+  .object({
+    rooms: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1),
+            name: z.string().min(1).nullable(),
+            location: z.string().min(1),
+            dimensions: z.array(roomDimensionSchema),
+            confidence: z.number().finite().min(0).max(1),
+            warnings: z.array(z.string().min(1)),
+          })
+          .strict(),
+      )
+  })
+  .strict()
+
+const roomDimensionsVisionInputSchema = z.object({}).strict()
 
 export const briefManifestSchema = z
   .object({
@@ -252,6 +287,19 @@ export interface PdfToolRuntime {
   execFile(file: string, args: string[]): Promise<ExecResult>
 }
 
+export type RoomDimensionsVisionResult = z.infer<typeof roomDimensionsVisionResultSchema>
+
+export type RoomDimensionsVisionRequest = {
+  dataUrl: string
+  context: McpToolContext
+}
+
+export interface RoomDimensionsVisionRuntime {
+  workspaceRoot: string
+  containerWorkspaceRoot: string
+  analyzeImage(input: RoomDimensionsVisionRequest): Promise<RoomDimensionsVisionResult>
+}
+
 export type SessionWorkspace = {
   token: string
   root: string
@@ -353,6 +401,20 @@ function defaultRuntime(): PdfToolRuntime {
   }
 }
 
+function defaultRoomDimensionsVisionRuntime(): RoomDimensionsVisionRuntime {
+  return {
+    workspaceRoot: process.env.OM_OPENCODE_WORKSPACE_ROOT?.trim() || '/home/opencode/work',
+    containerWorkspaceRoot:
+      process.env.OM_OPENCODE_WORKSPACE_ROOT_CONTAINER?.trim() || '/home/opencode/work',
+    async analyzeImage(input) {
+      const service = input.context.container.resolve<
+        Pick<RoomDimensionsVisionRuntime, 'analyzeImage'>
+      >(ROOM_DIMENSIONS_VISION_SERVICE)
+      return service.analyzeImage(input)
+    },
+  }
+}
+
 function assertContained(parent: string, candidate: string, label: string): void {
   if (candidate === parent || !candidate.startsWith(`${parent}${path.sep}`)) {
     throw new Error(`[internal] PDF tool ${label} is outside configured root`)
@@ -449,6 +511,79 @@ async function requireActiveWorkspace(
   }
 
   return resolveSessionWorkspace(runtime.workspaceRoot, token, runtime.containerWorkspaceRoot)
+}
+
+async function requireRoomDimensionsWorkspace(
+  context: McpToolContext,
+  runtime: RoomDimensionsVisionRuntime,
+): Promise<SessionWorkspace> {
+  const token = context.sessionId
+  if (!token || !SESSION_TOKEN_RE.test(token)) {
+    throw new Error('[internal] Room dimensions tool requires an active canonical run session')
+  }
+  if (!context.tenantId || !context.organizationId || !context.userId) {
+    throw new Error('[internal] Room dimensions tool requires tenant, organization, and user scope')
+  }
+
+  const store = context.container.resolve<SessionStore>('agentRunSessionStore')
+  const [agentId, runId] = await Promise.all([
+    store.resolveActiveAgentId(token),
+    store.resolveActiveRunId(token),
+  ])
+  if (!runId) throw new Error('[internal] Room dimensions tool has no active run')
+  if (agentId !== ROOM_DIMENSIONS_AGENT_ID) {
+    throw new Error('[internal] Room dimensions tool active agent mismatch')
+  }
+
+  return resolveSessionWorkspace(runtime.workspaceRoot, token, runtime.containerWorkspaceRoot)
+}
+
+function detectImageMediaType(bytes: Buffer): 'image/png' | 'image/jpeg' | 'image/webp' | null {
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  ) {
+    return 'image/png'
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return 'image/jpeg'
+  }
+  if (
+    bytes.length >= 12 &&
+    bytes.toString('ascii', 0, 4) === 'RIFF' &&
+    bytes.toString('ascii', 8, 12) === 'WEBP'
+  ) {
+    return 'image/webp'
+  }
+  return null
+}
+
+async function readSingleRoomImage(workspace: SessionWorkspace): Promise<string> {
+  // HACK(hackathon): Enterprise 0.8 exposes no pre-staging count/manifest; two
+  // attachments with the same sanitized destination can collapse upstream.
+  // Remove this residual once the stager supports per-agent cardinality.
+  const entries = (await readdir(workspace.inDir, { withFileTypes: true })).filter((entry) =>
+    entry.isFile(),
+  )
+  if (entries.length !== 1) {
+    throw new Error('Room dimensions extraction requires exactly one staged image')
+  }
+
+  const inputPath = path.join(workspace.inDir, entries[0]!.name)
+  const bytes = await readFile(inputPath)
+  if (bytes.length === 0 || bytes.length > MAX_ROOM_IMAGE_BYTES) {
+    throw new Error('Room dimensions image must be non-empty and at most 20 MiB')
+  }
+  const mediaType = detectImageMediaType(bytes)
+  if (!mediaType) throw new Error('Room dimensions input must be a PNG, JPEG, or WebP image')
+  return `data:${mediaType};base64,${bytes.toString('base64')}`
 }
 
 async function findSingleInput(workspace: SessionWorkspace): Promise<string | ProcessingFailure> {
@@ -844,6 +979,7 @@ async function finalizePdf(
         evidence: plan.evidence,
       })),
     }
+
     const briefTemp = path.join(workspace.outDir, '.brief.json.tmp')
     const plansTemp = path.join(workspace.outDir, '.floor-plans.json.tmp')
     await writeFile(briefTemp, `${JSON.stringify(brief, null, 2)}\n`, 'utf8')
@@ -914,5 +1050,32 @@ export function createProcessPdfTool(runtime: PdfToolRuntime = defaultRuntime())
   })
 }
 
-export const aiTools: AiToolDefinition[] = [createProcessPdfTool()]
+export function createRoomDimensionsVisionTool(
+  runtime: RoomDimensionsVisionRuntime = defaultRoomDimensionsVisionRuntime(),
+): AiToolDefinition {
+  return defineAiTool<unknown, RoomDimensionsVisionResult>({
+    name: ROOM_DIMENSIONS_TOOL_ID,
+    displayName: 'Property documents — extract room dimensions',
+    description:
+      'Analyze the single floor-plan image staged for the active room-dimensions run. Returns visible dimensions grouped by room; session, scope, image bytes, and model invocation are server-owned.',
+    tags: ['read', 'property-documents', 'image', 'vision'],
+    isMutation: false,
+    maxCallsPerTurn: 1,
+    requiredFeatures: ['agent_orchestrator.agents.run'],
+    inputSchema: roomDimensionsVisionInputSchema,
+    async handler(rawInput, context) {
+      roomDimensionsVisionInputSchema.parse(rawInput)
+      const workspace = await requireRoomDimensionsWorkspace(context, runtime)
+      const dataUrl = await readSingleRoomImage(workspace)
+      return roomDimensionsVisionResultSchema.parse(
+        await runtime.analyzeImage({ dataUrl, context }),
+      )
+    },
+  })
+}
+
+export const aiTools: AiToolDefinition[] = [
+  createProcessPdfTool(),
+  createRoomDimensionsVisionTool(),
+]
 export default aiTools

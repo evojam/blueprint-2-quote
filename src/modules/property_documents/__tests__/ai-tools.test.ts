@@ -5,15 +5,19 @@ import { describe, expect, it, jest } from '@jest/globals'
 import { z } from 'zod'
 import type { McpToolContext } from '@open-mercato/ai-assistant/modules/ai_assistant/lib/types'
 import { getAgentEntry } from '@open-mercato/enterprise/modules/agent_orchestrator/lib/sdk/defineAgent'
-import '../ai-agents'
+import { ROOM_DIMENSIONS_AGENT_ID } from '../ai-agents'
 import {
   PDF_AGENT_ID,
   PDF_TEXT_READER_AGENT_ID,
+  ROOM_DIMENSIONS_TOOL_ID,
+  createRoomDimensionsVisionTool,
   createProcessPdfTool,
   processPdfInputSchema,
   resolveSessionWorkspace,
   validateRenderPages,
   type PdfToolRuntime,
+  type RoomDimensionsVisionRuntime,
+  type RoomDimensionsVisionResult,
 } from '../ai-tools'
 
 const SESSION_TOKEN = `sess_${'a'.repeat(32)}`
@@ -444,6 +448,74 @@ describe('property_documents.process_pdf', () => {
 
     await expect(tool.handler({ operation: 'inspect' }, makeContext('other.agent'))).rejects.toThrow(
       'active agent mismatch',
+    )
+  })
+})
+
+describe('property_documents.extract_room_dimensions', () => {
+  it('analyzes exactly one staged image for the active room-dimensions agent', async () => {
+    const { root, input } = await makeWorkspace('floor-plan.png')
+    await writeFile(input, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    const resultFixture: RoomDimensionsVisionResult = {
+      rooms: [
+        {
+          id: 'room-001',
+          name: null,
+          location: 'upper-left room',
+          dimensions: [
+            {
+              value: 275,
+              unit: 'cm',
+              orientation: 'height',
+              kind: 'ceiling_height',
+              sourceText: 'H = 275 cm',
+              confidence: 0.99,
+            },
+          ],
+          confidence: 0.95,
+          warnings: [],
+        },
+      ],
+    }
+    const analyzeImage = jest.fn(
+      async (_input: Parameters<RoomDimensionsVisionRuntime['analyzeImage']>[0]) => resultFixture,
+    )
+    const runtime: RoomDimensionsVisionRuntime = {
+      workspaceRoot: root,
+      containerWorkspaceRoot: '/home/opencode/work',
+      analyzeImage,
+    }
+    const tool = createRoomDimensionsVisionTool(runtime)
+
+    await expect(tool.handler({}, makeContext(ROOM_DIMENSIONS_AGENT_ID))).resolves.toEqual(
+      resultFixture,
+    )
+    expect(tool.name).toBe(ROOM_DIMENSIONS_TOOL_ID)
+    expect(analyzeImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dataUrl: expect.stringMatching(/^data:image\/png;base64,/),
+      }),
+    )
+  })
+
+  it('fails closed for a different active agent or multiple staged images', async () => {
+    const { root } = await makeWorkspace('floor-plan.png')
+    const runtime: RoomDimensionsVisionRuntime = {
+      workspaceRoot: root,
+      containerWorkspaceRoot: '/home/opencode/work',
+      analyzeImage: jest.fn(async () => ({ rooms: [] })),
+    }
+    const tool = createRoomDimensionsVisionTool(runtime)
+
+    await expect(tool.handler({}, makeContext('other.agent'))).rejects.toThrow(
+      'active agent mismatch',
+    )
+    await writeFile(
+      path.join(root, SESSION_TOKEN, 'in', 'second.png'),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    )
+    await expect(tool.handler({}, makeContext(ROOM_DIMENSIONS_AGENT_ID))).rejects.toThrow(
+      'exactly one staged image',
     )
   })
 })

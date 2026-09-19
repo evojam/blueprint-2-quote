@@ -11,7 +11,7 @@ Choose module AI versus file-agent orchestration, then implement typed inputs/ou
 
 1. Read `.ai/guides/ai-workflows.md` and choose typed module agent/tool, low-level MCP/OpenCode/Code Mode, orchestrator, or workflow with `references/surface-selector.md`.
 2. For module agents/tools, follow `references/module-agents-and-tools.md`: discovery files, definitions, model factory, tools, ACL/setup, approval mutations, UI parts, loop budgets, and generation.
-3. For file-agent/orchestrator/subagent work, invoke `om-framework-context` for the installed orchestrator module, then follow `references/orchestrator-agents.md` for outcomes, samples, embedded skills, bounded delegation, outputs, and resume/error states.
+3. For file-agent/orchestrator/subagent work, invoke `om-create-opencode-agent`; it resolves the installed orchestrator contract and owns outcomes, samples, embedded skills, bounded delegation, output/file policy, runtime registration, and live verification.
 4. Follow `references/attachments-and-overrides.md` for authorized attachments/artifacts, cleanup, extensions, replacements, and disable behavior.
 5. Test missing provider, denied ACL/scope, tool validation, budgets, approval/cancel/expire/stale version, artifact authorization, and generated registration.
 
