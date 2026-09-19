@@ -25,10 +25,19 @@ describe('rfq_intake workflow-safe command declarations', () => {
     expect(ids).toEqual(expect.arrayContaining(['rfq_intake.requirements.match']))
   })
 
+  it('declares the funnel move, because the workflow\'s first step cannot run without it', () => {
+    const entry = listWorkflowSafeCommands().find((e) => e.commandId === 'rfq_intake.deal.advance')
+
+    // Missing from the catalogue, `executeUpdateEntity` refuses and the instance ends
+    // FAILED on step one — the PDF is never read. Loud, but on the wrong thing.
+    expect(entry).toBeDefined()
+    expect(entry?.requiredFeatures).toEqual(['customers.deals.manage'])
+  })
+
   it('leaves every rfq_intake entry opt-in, so a tenant enables them deliberately', () => {
     const rfqEntries = listWorkflowSafeCommands().filter((e) => e.commandId.startsWith('rfq_intake.'))
 
-    expect(rfqEntries).toHaveLength(3)
+    expect(rfqEntries).toHaveLength(4)
     // Upstream discourages grandfathering new commands: `defaultEnabled` is reserved
     // for commands that predate the tenant setting. Nothing here runs until a tenant
     // switches it on once — that is gate 2, and it fails as a silent skip.
