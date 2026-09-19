@@ -50,6 +50,22 @@ function isPdf(contentType: string | null, fileName: string | null): boolean {
 }
 
 /**
+ * RFC Message-IDs are compared without their angle brackets or surrounding space.
+ *
+ * Today both sides agree: Resend returns `<60D52309-…@evojam.com>` and the inbound route
+ * stores `data.message_id` verbatim (`inbox_ops/api/webhook/inbound.ts:138`), so plain
+ * equality would work. It is normalized anyway because this comparison is the hinge of
+ * the whole feature and it fails SILENTLY — one side trimming a bracket would leave the
+ * analysis never starting, with no error anywhere, which is exactly the class of bug
+ * this feature exists to fix.
+ */
+export function normalizeMessageId(value: string | null | undefined): string | null {
+  const trimmedValue = typeof value === 'string' ? value.trim() : ''
+  if (!trimmedValue) return null
+  return trimmedValue.replace(/^<+/, '').replace(/>+$/, '').trim() || null
+}
+
+/**
  * Integration first, environment second.
  *
  * The integration is the right source: it is per-tenant, encrypted, and set by an
@@ -98,7 +114,8 @@ export async function fetchInboundPdfs(input: {
   apiKey: string
   messageId: string | null
 }): Promise<InboundPdf[]> {
-  if (!input.messageId) return []
+  const wanted = normalizeMessageId(input.messageId)
+  if (!wanted) return []
   const resend = new Resend(input.apiKey)
 
   const list = await resend.emails.receiving.list()
@@ -106,7 +123,9 @@ export async function fetchInboundPdfs(input: {
     logger.warn('Resend receiving.list failed', { error: list.error })
     return []
   }
-  const match = (list.data?.data ?? []).find((entry) => entry.message_id === input.messageId)
+  const match = (list.data?.data ?? []).find(
+    (entry) => normalizeMessageId(entry.message_id) === wanted,
+  )
   if (!match) {
     logger.info('No Resend inbound record matches this message id', { messageId: input.messageId })
     return []
