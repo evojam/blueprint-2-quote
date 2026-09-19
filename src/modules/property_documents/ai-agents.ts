@@ -55,6 +55,10 @@ const catalogMatcherMatchesSchema = z
     }
   })
 
+/**
+ * @deprecated Use grouped mode (`mode: 'grouped'`) and its v2 result envelope.
+ * Legacy flat results remain supported through the next minor release.
+ */
 export const catalogMatcherLegacyResultSchema = z
   .object({
     kind: z.literal('research'),
