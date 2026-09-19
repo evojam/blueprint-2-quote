@@ -10,6 +10,7 @@ Links a CRM deal to the sales quote or order produced for it.
 | Command | `commands/document-links.ts` | `deal_links.document_links.create`. The only write path for a hand-created link. Commits outside the caller's transaction — call it AFTER yours commits. |
 | Route | `api/document-links/route.ts` | `GET` (filter by `dealId`, newest first) and `POST`. |
 | Deal widget | `widgets/injection/deal-documents/` | The tab on the deal detail page: lists a deal's linked documents and is the only place a link is created by hand. |
+| Document widget | `widgets/injection/document-deals/` | The Deals tab on the sales document detail page (quote and order): lists the deals linked to that document and links another. |
 | Convert interceptor | `commands/interceptors.ts` | Carries the link across quote → order conversion. |
 
 ## Creating a link by hand
@@ -28,6 +29,12 @@ shortened id and a "not found" marker instead of hiding it.
 The picker is always visible, whether or not the deal already has linked documents, and
 is visible to anyone who can see the tab; without `customers.deals.manage` the link
 attempt returns 403, surfaced inline.
+
+The mirror surface lives on the sales document: the Deals tab on a quote or an order
+detail page lists the deals linked to that document and links another. A document may
+carry several deals, the same way a deal may carry several documents — neither
+`deal_id` nor `document_id` is uniquely indexed. Its picker searches deals by title
+(`lib/deal-options.ts`, backed by `customers/deals`).
 
 ## Known gaps
 
@@ -55,3 +62,6 @@ attempt returns 403, surfaced inline.
   and a widget-level `features` gate would hide the link list as well.
 - **No UI for orphaned links.** With the global list page gone, a link row pointing at a
   document that no longer exists can no longer be found through any UI — only SQL.
+- **Encrypted tenants cannot use the document-side picker.** The deals route collapses a
+  `search` to "no matches" when tenant data encryption is on, so only the unfiltered first
+  page of deals is reachable from a quote or an order.
