@@ -1,0 +1,11 @@
+{
+  "task": "Extract the complete server-validated room measurement set from the attached floor-plan image.",
+  "__files": {
+    "attachments": [
+      {
+        "attachmentId": "83049dfa-020b-4097-8192-367027b4a317",
+        "as": "floor-plan.png"
+      }
+    ]
+  }
+}

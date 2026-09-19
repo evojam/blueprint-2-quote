@@ -7,13 +7,17 @@ const currentFile = fileURLToPath(import.meta.url)
 const PROPERTY_DOCUMENT_AGENT_FILES = [
   { fileName: 'property_documents_pdf_intake.md' },
   { fileName: 'property_documents_room_dimensions.md', readableSubdir: 'in' },
+  { fileName: 'property_documents_room_measurements.md', readableSubdir: 'in' },
 ]
 const ROOM_DIMENSIONS_AGENT_FILE = 'property_documents_room_dimensions.md'
+const ROOM_MEASUREMENTS_AGENT_FILE = 'property_documents_room_measurements.md'
 const ROOM_DATA_OBJECT_MARKER = 'the `data` object'
 const ROOM_JSON_OBJECT_MARKER =
   'Pass it as the `outcome` argument of the submit_outcome tool, as a JSON object (not a string):'
 const ROOM_RESEARCH_ENVELOPE_GUIDANCE =
   'Pass a complete `{ "kind": "research", "data": [...] }` envelope as the `outcome` argument of the submit_outcome tool; the schema below describes its `data` array:'
+const ROOM_RESEARCH_OBJECT_ENVELOPE_GUIDANCE =
+  'Pass a complete `{ "kind": "research", "data": { ... } }` envelope as the `outcome` argument of the submit_outcome tool; the schema below describes its `data` object:'
 
 const PDF_INTAKE_AGENT_FILE = 'property_documents_pdf_intake.md'
 const OUTCOME_CONTRACT_MARKER = '## Outcome contract\n'
@@ -82,6 +86,23 @@ function hardenRoomDimensionsOutcomeContract(source, agentPath) {
     .replace(ROOM_JSON_OBJECT_MARKER, ROOM_RESEARCH_ENVELOPE_GUIDANCE)
 }
 
+function hardenRoomMeasurementsOutcomeContract(source, agentPath) {
+  if (
+    !source.includes(ROOM_JSON_OBJECT_MARKER) &&
+    source.includes(ROOM_DATA_OBJECT_MARKER) &&
+    source.includes(ROOM_RESEARCH_OBJECT_ENVELOPE_GUIDANCE)
+  ) {
+    return source
+  }
+  if (
+    !source.includes(ROOM_DATA_OBJECT_MARKER) ||
+    !source.includes(ROOM_JSON_OBJECT_MARKER)
+  ) {
+    throw new Error(`Cannot find the generated room-object outcome guidance in ${agentPath}`)
+  }
+  return source.replace(ROOM_JSON_OBJECT_MARKER, ROOM_RESEARCH_OBJECT_ENVELOPE_GUIDANCE)
+}
+
 function hardenGeneratedAgentFile(cwd, fileName, readableSubdir) {
   const agentPath = path.resolve(cwd, 'docker/opencode/agents', fileName)
   const workspaceRoot = (
@@ -126,6 +147,7 @@ function hardenGeneratedAgentFile(cwd, fileName, readableSubdir) {
     .replace('  edit: true\n', '')
     .replace('  "open-mercato_agent_orchestrator_load_skill": true\n', '')
     .replace('  "open-mercato_agent_orchestrator_run_skill_script": true\n', '')
+    .replace('  "open-mercato_agent_orchestrator_delegate_agent": true\n', '')
   if (!toolsBlock.includes('  "*": false\n')) {
     toolsBlock = toolsBlock.replace('tools:\n', 'tools:\n  "*": false\n')
   }
@@ -161,6 +183,9 @@ function hardenGeneratedAgentFile(cwd, fileName, readableSubdir) {
   if (fileName === ROOM_DIMENSIONS_AGENT_FILE) {
     hardenedSource = hardenRoomDimensionsOutcomeContract(hardenedSource, agentPath)
   }
+  if (fileName === ROOM_MEASUREMENTS_AGENT_FILE) {
+    hardenedSource = hardenRoomMeasurementsOutcomeContract(hardenedSource, agentPath)
+  }
 
   const requiredPolicy = [
     '  "*": false',
@@ -187,6 +212,7 @@ function hardenGeneratedAgentFile(cwd, fileName, readableSubdir) {
     '  bash: allow',
     'open-mercato_agent_orchestrator_load_skill',
     'open-mercato_agent_orchestrator_run_skill_script',
+    'open-mercato_agent_orchestrator_delegate_agent',
   ]) {
     if (hardenedSource.includes(forbidden)) {
       throw new Error(`Generated property document agent ${fileName} unexpectedly grants: ${forbidden.trim()}`)
@@ -205,13 +231,19 @@ export function hardenPropertyPdfAgentFile(cwd = process.cwd()) {
   // so app-owned transitive dependencies otherwise stay stale across restarts.
   const bundleInvalidations = [
     {
-      sources: ['src/modules/property_documents/ai-tools.ts'],
+      sources: [
+        'src/modules/property_documents/ai-tools.ts',
+        'src/modules/property_documents/room-measurements-contract.ts',
+      ],
       bundle: '.mercato/generated/ai-tools.generated.bundled.mjs',
     },
     {
       sources: [
         'src/modules/property_documents/di.ts',
         'src/modules/property_documents/room-dimensions-vision.ts',
+        'src/modules/property_documents/room-measurements-contract.ts',
+        'src/modules/property_documents/room-measurements-vision.ts',
+        'src/modules/property_documents/property-documents-vision-provider.ts',
       ],
       bundle: '.mercato/generated/di.generated.mjs',
     },
