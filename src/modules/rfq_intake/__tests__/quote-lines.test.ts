@@ -38,6 +38,9 @@ const companyEntityId = '99999999-9999-4999-8999-999999999999'
 let salesCalls: Array<{ id: string; input: any }>
 let companyLink: unknown
 let personLink: unknown
+/** The `sales.order_status` dictionary row, or null for an org that never seeded it. */
+let statusDictionary: unknown
+let draftStatusEntry: unknown
 
 function makeCtx() {
   return {
@@ -64,6 +67,8 @@ function makeCtx() {
                 }
                 if (entity.name === 'CustomerDealCompanyLink') return companyLink
                 if (entity.name === 'CustomerDealPersonLink') return personLink
+                if (entity.name === 'Dictionary') return statusDictionary
+                if (entity.name === 'DictionaryEntry') return draftStatusEntry
                 throw new Error(`unexpected findOne on ${entity.name}`)
               },
             }),
@@ -102,6 +107,8 @@ beforeEach(() => {
   salesCalls = []
   companyLink = null
   personLink = null
+  statusDictionary = { id: 'dict-order-status' }
+  draftStatusEntry = { id: 'entry-draft' }
   loadQuotableProduct.mockReset()
   resolveUnitPrice.mockReset()
   resolveQuantity.mockReset()
@@ -342,5 +349,51 @@ describe('rfq_intake.quote.create line assembly', () => {
 
     expect(result.warnings).toEqual(['ceiling_height_missing:0'])
     expect(salesCalls).toHaveLength(0)
+  })
+
+  it('starts the quote in Sales own draft status, which sending then replaces', async () => {
+    loadQuotableProduct.mockResolvedValue(paint())
+    resolveQuantity.mockReturnValue(area(6))
+    resolveUnitPrice.mockResolvedValue(pln())
+
+    await createQuoteCommand.execute(
+      input([{ catalogProductId: paintId, basis: 'floor_area', roomIds: ['room-1'] }]),
+      makeCtx(),
+    )
+
+    expect(salesCalls[0].input.statusEntryId).toBe('entry-draft')
+  })
+
+  it('still creates the quote when the status dictionary was never seeded', async () => {
+    // `mercato sales seed-statuses` is what creates it. An organisation that skipped
+    // that step gets a quote with no status label rather than a failed request.
+    statusDictionary = null
+    draftStatusEntry = null
+    loadQuotableProduct.mockResolvedValue(paint())
+    resolveQuantity.mockReturnValue(area(6))
+    resolveUnitPrice.mockResolvedValue(pln())
+
+    const result = await createQuoteCommand.execute(
+      input([{ catalogProductId: paintId, basis: 'floor_area', roomIds: ['room-1'] }]),
+      makeCtx(),
+    )
+
+    expect(salesCalls[0].input).not.toHaveProperty('statusEntryId')
+    expect(result.quoteId).toBe('created-quote-id')
+  })
+
+  it('omits the status when the dictionary exists but carries no draft entry', async () => {
+    draftStatusEntry = null
+    loadQuotableProduct.mockResolvedValue(paint())
+    resolveQuantity.mockReturnValue(area(6))
+    resolveUnitPrice.mockResolvedValue(pln())
+
+    const result = await createQuoteCommand.execute(
+      input([{ catalogProductId: paintId, basis: 'floor_area', roomIds: ['room-1'] }]),
+      makeCtx(),
+    )
+
+    expect(salesCalls[0].input).not.toHaveProperty('statusEntryId')
+    expect(result.quoteId).toBe('created-quote-id')
   })
 })
