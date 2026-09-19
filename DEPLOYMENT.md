@@ -329,21 +329,32 @@ It will look up and answer 401 on every tool call. Check the container log for
 ### The MCP API key handoff
 
 Compose passes the key through a shared volume: `mcp` writes `/run/mcp-shared/mcp-api-key`,
-`opencode` mounts it read-only. Two ways to do this on ECS:
+`opencode` mounts it read-only. **Mirror that on ECS with a task-scoped volume.** Declare one
+`volumes` entry, mount it at `/run/mcp-shared` on both containers, read-only on `opencode`,
+and set `MCP_SERVER_API_KEY_FILE=/run/mcp-shared/mcp-api-key` on both.
 
-- **Task-scoped volume** — mirrors compose. Declare one `volumes` entry, mount it at
-  `/run/mcp-shared` on both containers (read-only on `opencode`). Keeps the key off the
-  task definition.
-- **Shared secret** — set `MCP_SERVER_API_KEY` from Secrets Manager on both containers and
-  mount nothing. The entrypoint prefers the env value and skips the file wait entirely,
-  which also removes one of the two 1800 s waits.
+**There is no shared-secret shortcut.** Handing both containers the same
+`MCP_SERVER_API_KEY` from Secrets Manager looks like it should remove the volume and one of
+the two 1800 s waits. It does not work, and it fails at the first tool call rather than at
+boot:
 
-The second is the smaller moving part and the recommendation for the demo. Do not set both.
+- The MCP server authenticates every request with `findApiKeyBySecret()`
+  (`ai-assistant/lib/http-server.ts`) — the secret has to resolve to a live `api_keys` row.
+  Only `omk_`-prefixed keys minted by `mcp:ensure-api-key` do; an arbitrary Secrets Manager
+  value answers 401.
+- `mcp:ensure-api-key` reads no environment variable. The **file** is its idempotency
+  anchor (`mcp-ensure-api-key.ts`): when the path holds no live key of the expected name, it
+  soft-deletes the stale ones and mints a fresh secret. So even seeding Secrets Manager with
+  a real `omk_` value is self-defeating — the next `mcp` boot invalidates it.
 
-If you take the volume route, mind the user: compose runs `mcp` as `user: "0"`, but the
-image's runtime user is `omuser` (uid 1001), which is what the ECS containers will be. The
-mount point has to be writable by 1001, or key provisioning fails and `opencode` waits out
-its full 1800 s before starting unauthenticated.
+`opencode` does honour `MCP_SERVER_API_KEY` and skips the file wait, but only the `mcp` side
+can produce a value it will be allowed to use.
+
+Mind the user on the volume. Compose runs `mcp` as `user: "0"`; the image's runtime user is
+`omuser` (uid 1001). A Fargate task volume is created root-owned `0755`, so a `mcp` container
+left at the image default cannot write the key file. Set `"user": "0"` on the `mcp` container
+definition, as compose does. The written file is `0644`, which is what lets `opencode` read it
+as its own non-root user.
 
 ### Environment
 
@@ -365,12 +376,13 @@ container.
 | `MCP_WAIT_FOR_APP_TIMEOUT` | E | — | seconds; default 1800 |
 | `OM_ENABLE_ENTERPRISE_MODULES` | E | — | `true` |
 | `OM_ENABLE_ENTERPRISE_MODULES_AGENTS` | E | — | `true` |
-| `MCP_SERVER_API_KEY` | S | S | same value on both (shared-secret option) |
+| `MCP_SERVER_API_KEY_FILE` | E | E | `/run/mcp-shared/mcp-api-key` on both — the shared volume. Do **not** substitute `MCP_SERVER_API_KEY`; see the handoff section above |
 | `OPENCODE_MCP_URL` | — | E | **`http://localhost:3001/mcp`, required.** Default is `host.docker.internal`, a compose-ism |
-| `OM_AI_PROVIDER` | — | E | `openai` / `anthropic` / … ; default `openai` |
-| `OM_AI_MODEL` | — | E | optional; the entrypoint picks a per-provider default |
-| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | S | S | whichever provider is selected, on **both** |
-| `OPENCODE_PASSWORD` | — | S | optional HTTP Basic on 4096; cheap defence in depth |
+| `OM_AI_PROVIDER` | — | E | `openai` / `anthropic` / `litellm` / `azure` / `openrouter` / … ; default `openai` |
+| `OM_AI_MODEL` | — | E | optional for most providers; **required for `litellm`**, which has no universal default (`entrypoint.sh`) |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | S | S | when the provider is the vendor directly, on **both** |
+| `LITELLM_BASE_URL` / `LITELLM_API_KEY` | S | S | when `OM_AI_PROVIDER=litellm`. The OpenCode entrypoint has a first-class `litellm` branch, so a gateway needs no extra keys — this is the option to prefer when the app already routes through one |
+| `OPENCODE_SERVER_PASSWORD` | — | S | optional HTTP Basic on 4096; cheap defence in depth. The variable is `OPENCODE_SERVER_PASSWORD` — `OPENCODE_PASSWORD` is the compose *host* variable that feeds it, and setting that name in the task definition does nothing |
 
 `OM_ENABLE_ENTERPRISE_MODULES*` are baked into the app image with defaults of `true`
 (`Dockerfile`), so the `mcp` container inherits them; the rows above are belt-and-braces
@@ -384,7 +396,14 @@ for a task definition that overrides the environment wholesale.
 | `MCP_URL` | app | `http://localhost:3001` (matches the built-in default) |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | app | already listed in the matrix; required once agents run |
 
-Nothing changes for the worker or the migration task.
+Nothing changes for the worker.
+
+The **migration task is not untouched**, though nothing about its variables changes: the
+migrate gate's `run-task` overrides only the `app` container's command, so it starts the whole
+definition — sidecars included. Mark both sidecars `"essential": false`. An essential container
+that dies stops the task, which surfaces on the app container as SIGKILL / exit 137 and reads
+as a failed migration. Non-essential also keeps an agent-plane failure from cycling the app
+service in normal operation.
 
 ### Where the sandbox actually runs
 
