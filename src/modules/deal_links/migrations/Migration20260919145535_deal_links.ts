@@ -9,4 +9,8 @@ export class Migration20260919145535_deal_links extends Migration {
     this.addSql(`create index "deal_document_links_deal_idx" on "deal_document_links" ("tenant_id", "organization_id", "deal_id", "deleted_at");`);
   }
 
+  override down(): void | Promise<void> {
+    this.addSql(`drop table if exists "deal_document_links" cascade;`);
+  }
+
 }
