@@ -19,6 +19,7 @@ import {
   type RenovationCategorySeed,
   type RenovationServiceSeed,
 } from './data/renovation-catalog'
+import { E } from '@/.mercato/generated/entities.ids.generated'
 import {
   parseSeedArgs,
   resolveOrganizationScope,
@@ -39,7 +40,9 @@ const MIN_QUANTITY = 1
 const VAT_8_CODE = 'vat-8'
 const VAT_8_NAME = '8% VAT'
 const VAT_8_RATE = 8
-const QUERY_INDEX_ENTITY = 'catalog:products'
+// Taken from the generated ids, never spelled out: a hand-written entity id drifts
+// silently and only surfaces as `relation "..." does not exist` at rebuild time.
+const QUERY_INDEX_ENTITY = E.catalog.catalog_product
 
 async function seedUnits(
   em: EntityManager,
