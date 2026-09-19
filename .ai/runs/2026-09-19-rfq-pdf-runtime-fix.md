@@ -22,14 +22,14 @@ Make the RFQ PDF intake agent receive its staged file, complete without an OpenC
 
 ### Phase 1: Branch update
 
-- [ ] 1.1 Rebase the RFQ branch onto current main.
+- [x] 1.1 Rebase the RFQ branch onto current main. — 93a2185
 
 ### Phase 2: Runtime fix
 
-- [ ] 2.1 Forward staged files and lock down the PDF intake profile.
-- [ ] 2.2 Regenerate the profile and verify the targeted workflow tests.
+- [x] 2.1 Forward staged files and lock down the PDF intake profile. — 93a2185
+- [x] 2.2 Regenerate the profile and verify the targeted workflow tests. — 93a2185
 
 ### Phase 3: Delivery
 
-- [ ] 3.1 Run the configured full validation gate.
+- [x] 3.1 Run the configured full validation gate. — 93a2185
 - [ ] 3.2 Publish the rebased branch and open the review PR.
