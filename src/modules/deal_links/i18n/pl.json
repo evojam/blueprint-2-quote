@@ -1,8 +1,18 @@
 {
   "deal_links.kind.order": "Zamówienie",
   "deal_links.kind.quote": "Wycena",
+  "deal_links.option.order": "Zamówienie {number}",
+  "deal_links.option.quote": "Wycena {number}",
   "deal_links.state.empty": "Do tej sprawy nie powstała jeszcze żadna wycena.",
   "deal_links.state.error": "Nie udało się wczytać powiązanych dokumentów.",
   "deal_links.state.loading": "Wczytywanie…",
-  "deal_links.tab.label": "Wycena"
+  "deal_links.tab.label": "Wycena",
+  "deal_links.widget.link.error": "Nie udało się powiązać dokumentu.",
+  "deal_links.widget.link.placeholder": "Szukaj po numerze wyceny lub zamówienia…",
+  "deal_links.widget.link.submit": "Powiąż",
+  "deal_links.widget.link.title": "Powiąż dokument",
+  "deal_links.widget.summary.one": "{count} powiązany dokument",
+  "deal_links.widget.summary.other": "Powiązane dokumenty: {count}",
+  "deal_links.widget.title": "Powiązane dokumenty",
+  "deal_links.widget.unresolved": "nie znaleziono"
 }

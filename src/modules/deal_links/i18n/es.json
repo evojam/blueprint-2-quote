@@ -1,8 +1,18 @@
 {
   "deal_links.kind.order": "Order",
   "deal_links.kind.quote": "Quote",
+  "deal_links.option.order": "Order {number}",
+  "deal_links.option.quote": "Quote {number}",
   "deal_links.state.empty": "No quote has been produced for this case yet.",
   "deal_links.state.error": "Could not load the linked documents.",
   "deal_links.state.loading": "Loading…",
-  "deal_links.tab.label": "Quote"
+  "deal_links.tab.label": "Quote",
+  "deal_links.widget.link.error": "Could not link the document.",
+  "deal_links.widget.link.placeholder": "Search by quote or order number…",
+  "deal_links.widget.link.submit": "Link",
+  "deal_links.widget.link.title": "Link a document to this deal",
+  "deal_links.widget.summary.one": "{count} linked document",
+  "deal_links.widget.summary.other": "{count} linked documents",
+  "deal_links.widget.title": "Linked documents",
+  "deal_links.widget.unresolved": "not found"
 }
