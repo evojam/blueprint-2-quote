@@ -63,10 +63,14 @@ function buildCtx(options: {
       }
       if (name === 'commandBus') {
         return {
-          execute: async (id: string, payload: any) => {
+          // The real bus takes `{ input, ctx }` and answers `{ result, logEntry }`;
+          // mocking the bare-payload shape would hide a caller that got it wrong.
+          execute: async (id: string, callOptions: any) => {
             if (id !== 'agent_orchestrator.artifact.promote') throw new Error(`unexpected command ${id}`)
+            const payload = callOptions.input
             promoted.push(payload.fileName)
-            return options.promote ? options.promote() : { attachmentId: `att-${payload.fileName}` }
+            const result = options.promote ? options.promote() : { attachmentId: `att-${payload.fileName}` }
+            return { result, logEntry: null }
           },
         }
       }

@@ -7,6 +7,9 @@ export const metadata: ModuleInfo = {
   description: 'Turns an accepted AI Action Inbox proposal into a CRM case and starts the property-document agent chain.',
   author: 'Evojam',
   license: 'MIT',
+  // `setup.seedDefaults` runs in dependency order and demotes the pipeline customers
+  // seeds, so customers has to be initialised first.
+  requires: ['customers'],
 }
 
 export default metadata

@@ -601,6 +601,7 @@
   "products.edit.title": "Edit product",
   "profile.title": "Profile",
   "resources.messageObjects.resource.title": "Resource",
+  "rfq_intake.workflows.commands.deal.advance": "RFQ: move the case to a funnel stage",
   "rfq_intake.workflows.commands.plans.analyze": "Analyze RFQ floor plans",
   "rfq_intake.workflows.commands.requirements.match": "Match requirements to the catalog",
   "rules.nav.group": "Business Rules",

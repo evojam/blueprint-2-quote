@@ -7,7 +7,9 @@ import {
   ExecutionError,
 } from '@open-mercato/core/modules/inbox_ops/lib/executionHelpers'
 import { createLogger } from '@open-mercato/shared/lib/logger'
+import type { EntityManager } from '@mikro-orm/postgresql'
 import { ensureContact } from './lib/ensureContact'
+import { resolveRfqStageId } from './lib/pipeline'
 
 const logger = createLogger('rfq_intake').child({ component: 'inbox-action' })
 
@@ -99,6 +101,15 @@ async function executeCreateRfqAction(
     companyName: payload.companyName,
   })
 
+  // The case opens in the funnel's first stage. A missing funnel is not fatal: the RFQ
+  // still gets a case, it just sits outside the kanban until someone runs
+  // `mercato rfq_intake seed-pipeline`.
+  const stageId = await resolveRfqStageId(
+    ctx.em as EntityManager,
+    { tenantId: ctx.tenantId, organizationId: ctx.organizationId },
+    'new',
+  )
+
   const result = await executeCommand<Record<string, unknown>, { entityId?: string; id?: string }>(
     hCtx,
     'customers.deals.create',
@@ -108,6 +119,7 @@ async function executeCreateRfqAction(
       title: buildDealTitle(payload),
       description: buildDealDescription(payload),
       source: RFQ_DEAL_SOURCE,
+      ...(stageId ? { pipelineStageId: stageId } : {}),
       ...(contact?.customerEntityId
         ? { primaryPersonEntityId: contact.customerEntityId, personIds: [contact.customerEntityId] }
         : {}),

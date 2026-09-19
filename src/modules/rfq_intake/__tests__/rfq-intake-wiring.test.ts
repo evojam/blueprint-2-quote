@@ -34,7 +34,10 @@ describe('rfq_intake analysis workflow', () => {
 
     const definition = workflow!.definition as {
       interpolation?: string
-      steps: Array<{ stepId: string; activities?: Array<{ activityType: string; config: Record<string, unknown> }> }>
+      steps: Array<{
+        stepId: string
+        activities?: Array<{ activityType: string; config: Record<string, unknown> }>
+      }>
       triggers?: Array<{ eventPattern: string; config?: { contextMapping?: Array<{ targetKey: string }> } }>
     }
 
@@ -43,13 +46,21 @@ describe('rfq_intake analysis workflow', () => {
 
     const activities = definition.steps.flatMap((step) => step.activities ?? [])
     expect(activities.map((activity) => activity.activityType)).toEqual([
+      'UPDATE_ENTITY',
       'INVOKE_AGENT',
       'UPDATE_ENTITY',
       'UPDATE_ENTITY',
+      'UPDATE_ENTITY',
     ])
-    expect(activities[0].config.agentId).toBe('property_documents.pdf_intake')
-    expect(activities[1].config.commandId).toBe('rfq_intake.plans.analyze')
-    expect(activities[2].config.commandId).toBe('rfq_intake.requirements.match')
+    // The funnel brackets the work: quoting before the first agent, review after the
+    // last one. A case that never leaves `Nowe zgłoszenie` means the chain never ran.
+    expect(activities[0].config.commandId).toBe('rfq_intake.deal.advance')
+    expect(activities[0].config.input).toMatchObject({ stage: 'quoting' })
+    expect(activities[1].config.agentId).toBe('property_documents.pdf_intake')
+    expect(activities[2].config.commandId).toBe('rfq_intake.plans.analyze')
+    expect(activities[3].config.commandId).toBe('rfq_intake.requirements.match')
+    expect(activities[4].config.commandId).toBe('rfq_intake.deal.advance')
+    expect(activities[4].config.input).toMatchObject({ stage: 'review' })
 
     const trigger = definition.triggers?.[0]
     expect(trigger?.eventPattern).toBe('rfq_intake.rfq.created')
