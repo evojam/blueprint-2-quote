@@ -41,6 +41,7 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'communication_channels', from: '@open-mercato/core' },
   { id: 'ai_assistant', from: '@open-mercato/ai-assistant' },
   { id: 'inbox_ops', from: '@open-mercato/core' },
+  { id: 'catalog_seed', from: '@app' },
 ]
 
 // S3-backed attachment storage. Fargate has no persistent volume, so with this off
