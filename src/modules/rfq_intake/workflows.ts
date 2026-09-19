@@ -165,6 +165,28 @@ const rfqAnalysis = defineWorkflow({
       ],
     },
     {
+      stepId: 'draft_quote',
+      stepName: 'Draft a quote',
+      stepType: 'AUTOMATED',
+      description: 'Proposes and auto-disposes one quote creation action from measurements and catalog matches.',
+      activities: [
+        {
+          activityId: 'invoke_quote_drafter',
+          activityName: 'Draft RFQ quote',
+          activityType: 'INVOKE_AGENT' as never,
+          async: false,
+          config: {
+            agentId: 'rfq_intake.quote_drafter',
+            input: {
+              dealId: '{{context.dealId}}',
+              workflowInstanceId: '{{workflow.instanceId}}',
+            },
+            onResult: { autoApproveThreshold: 0 },
+          },
+        },
+      ],
+    },
+    {
       stepId: 'mark_review',
       stepName: 'Hand the case to a human',
       stepType: 'AUTOMATED',
@@ -194,7 +216,8 @@ const rfqAnalysis = defineWorkflow({
     { transitionId: 't_extract', transitionName: 'Extract', fromStepId: 'mark_quoting', toStepId: 'extract_pdf', trigger: 'auto' },
     { transitionId: 't_measure', transitionName: 'Measure', fromStepId: 'extract_pdf', toStepId: 'measure_rooms', trigger: 'auto' },
     { transitionId: 't_match', transitionName: 'Match', fromStepId: 'measure_rooms', toStepId: 'match_catalog', trigger: 'auto' },
-    { transitionId: 't_review', transitionName: 'Review', fromStepId: 'match_catalog', toStepId: 'mark_review', trigger: 'auto' },
+    { transitionId: 't_quote', transitionName: 'Draft quote', fromStepId: 'match_catalog', toStepId: 'draft_quote', trigger: 'auto' },
+    { transitionId: 't_review', transitionName: 'Review', fromStepId: 'draft_quote', toStepId: 'mark_review', trigger: 'auto' },
     { transitionId: 't_done', transitionName: 'Done', fromStepId: 'mark_review', toStepId: 'end', trigger: 'auto' },
   ],
 })
