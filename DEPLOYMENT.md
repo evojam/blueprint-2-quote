@@ -142,13 +142,26 @@ Compose keeps uploads on an `attachments_storage` volume. Fargate has no such vo
 written to the container filesystem are **lost on every task restart** and are not visible to
 the other container. If the demo involves uploads, PDFs or documents, enable S3:
 
-- `OM_ENABLE_STORAGE_S3=true` (this also adds `storage_s3` to `enabledModules`, so it is a
-  build-affecting flag, not just runtime — confirm whether the image must be rebuilt with it)
+- `OM_ENABLE_STORAGE_S3=true` adds `storage_s3` to `enabledModules`. Confirmed: it is a
+  **build-time** flag. `yarn generate` writes the registry from `src/modules.ts`, so an image
+  built without it has no `s3` storage driver and setting the variable in the task definition
+  changes nothing. The Dockerfile defaults the build-arg to `true`; keep the task definition in
+  agreement with the image.
 - `OM_INTEGRATION_STORAGE_S3_BUCKET` plus the matching region/credentials, or a task role with
   bucket access
-- Per-tenant preconfiguration is applied with `mercato storage_s3 configure-from-env`
+- Per-tenant preconfiguration is applied with `mercato storage_s3 configure-from-env`. It needs
+  `OM_INTEGRATION_STORAGE_S3_ACCESS_KEY_ID` **and** `_SECRET_ACCESS_KEY`: with only region and
+  bucket set it throws "Incomplete S3 env preset". On ECS, where the task role already grants
+  bucket access, skip the CLI and leave the marketplace credentials empty — the driver then
+  falls back to the AWS default credential chain (ambient mode).
+- Last step, and the one nothing does automatically: attachment partitions are seeded with
+  `storageDriver: 'local'`. Switch each one to S3 (bucket + region, credentials source left on
+  the marketplace/ambient option) in Configuration → Attachments, or uploads keep going to the
+  container filesystem even with the module loaded.
 
-Without this, attachments appear to work and silently vanish on the next deploy.
+Without this, attachments appear to work and silently vanish on the next deploy: with no `s3`
+driver registered, `StorageDriverFactory` falls back to the local driver without an error, and
+the partition UI still offers "S3" because it only checks the env flag.
 
 ### Search
 

@@ -38,6 +38,18 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'inbox_ops', from: '@open-mercato/core' },
 ]
 
+// S3-backed attachment storage. Fargate has no persistent volume, so with this off
+// every upload lands on the container filesystem and disappears on the next task
+// restart — the attachments partition UI even offers "S3" (it only checks the env
+// flag), while StorageDriverFactory silently falls back to the local driver because
+// nothing ever registered an `s3` driver. Like the enterprise flags below, this is a
+// BUILD-time input: `yarn generate` writes the registry from this list.
+const storageS3Enabled = parseBooleanWithDefault(process.env.OM_ENABLE_STORAGE_S3, false)
+
+if (storageS3Enabled) {
+  enabledModules.push({ id: 'storage_s3', from: '@open-mercato/storage-s3' })
+}
+
 const enterpriseModulesEnabled = parseBooleanWithDefault(process.env.OM_ENABLE_ENTERPRISE_MODULES, false)
 const enterpriseSsoEnabled = parseBooleanWithDefault(process.env.OM_ENABLE_ENTERPRISE_MODULES_SSO, false)
 const enterpriseSecurityEnabled = parseBooleanWithDefault(process.env.OM_ENABLE_ENTERPRISE_MODULES_SECURITY, false)
