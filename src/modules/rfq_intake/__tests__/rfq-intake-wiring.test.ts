@@ -24,6 +24,58 @@ describe('rfq_intake inbox action registry', () => {
     })
     expect(parsed.success).toBe(true)
   })
+
+  // Verbatim from the demo environment (proposal fa3ec747, sonnet via litellm): the
+  // model answered with a shape of its own invention, so `customerName` was undefined
+  // and the action failed with "expected string, received undefined" while every fact
+  // the enquiry carried was dropped on the floor.
+  const DRIFTED_PAYLOAD = {
+    notes: 'Brak dopasowanych pozycji w katalogu - wymagana ręczna kalkulacja kosztorysu.',
+    scope: ['gładzie na ścianach i sufitach', 'malowanie farbą lateksową'],
+    floors: 3,
+    area_m2: 240,
+    customer: { name: 'Marek Grochala', email: 'marek@evojam.com' },
+    location: 'Warszawa, Wawer',
+    channelId: 'bf0e0385-08f9-4f31-84a1-d65cccb0dbc0',
+    customerEntityId: 'e4157956-f136-4ebd-8f6a-a908dfd4829c',
+    ceiling_height_cm: '275-295',
+  }
+
+  it('lifts the contact out of the shape the model actually emits', async () => {
+    const registry = await import('@/.mercato/generated/inbox-actions.generated')
+    const definition = registry.getInboxAction('create_quote')!
+
+    const normalized = await definition.normalizePayload!({ ...DRIFTED_PAYLOAD }, {} as never)
+
+    expect(normalized.customerName).toBe('Marek Grochala')
+    expect(normalized.customerEmail).toBe('marek@evojam.com')
+    expect(definition.payloadSchema.safeParse(normalized).success).toBe(true)
+  })
+
+  it('keeps the enquiry facts in notes instead of dropping them', async () => {
+    const registry = await import('@/.mercato/generated/inbox-actions.generated')
+    const definition = registry.getInboxAction('create_quote')!
+
+    const normalized = await definition.normalizePayload!({ ...DRIFTED_PAYLOAD }, {} as never)
+    const notes = String(normalized.notes)
+
+    expect(notes).toContain('Brak dopasowanych pozycji w katalogu')
+    expect(notes).toContain('gładzie na ścianach i sufitach')
+    expect(notes).toContain('Warszawa, Wawer')
+    expect(notes).toContain('240 m2')
+    expect(notes).toContain('275-295')
+    expect(normalized.customer).toBeUndefined()
+  })
+
+  it('reaches the model with a schema of its own, not the filtered placeholder', async () => {
+    const registry = await import('@/.mercato/generated/inbox-actions.generated')
+    const definition = registry.getInboxAction('create_quote')!
+
+    // `extractionPrompt.ts:27` drops this exact string, which is how create_quote
+    // ended up in the prompt with no field list at all.
+    expect(definition.promptSchema).not.toBe('(shared with create_order)')
+    expect(definition.promptSchema).toContain('customerName')
+  })
 })
 
 describe('rfq_intake analysis workflow', () => {
