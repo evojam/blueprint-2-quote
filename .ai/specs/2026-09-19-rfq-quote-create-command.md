@@ -88,6 +88,8 @@ A failure in any one produces a silent `skipped`, not an error. Four are invisib
 
 Gate 3 accepts either name: `isEffectWithinVocabulary` passes when `allowedActions` contains the action type **or** the command ID. Gates 1 and 2 are the demo-killers.
 
+For scale: on `main`, `src/modules/rfq_intake/workflows.ts` declares exactly **one** workflow-safe command (`rfq_intake.requirements.match`), and `rfq_intake.deal.advance` exists as a command without being declared. This command is therefore the second declaration, not the fourth — the implementation plan records the full verified baseline.
+
 ### Scope derivation
 
 `tenantId` and `organizationId` come **only** from the command runtime context (`ctx.auth.tenantId`, `ctx.selectedOrganizationId ?? ctx.auth.orgId`) and fail closed when absent. `action.payload` originates from a language model and is treated as hostile: the input schema is non-strict so unknown keys are **stripped**, following `src/modules/deal_links/commands/document-links.ts:8-17`. A payload carrying `tenantId` cannot reach the write path.

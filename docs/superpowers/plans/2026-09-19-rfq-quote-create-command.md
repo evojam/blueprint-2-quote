@@ -4,277 +4,94 @@
 
 **Goal:** Build `rfq_intake.quote.create`, a command that turns an agent's mapping of renovation work onto Catalog services into a priced, unsent Sales quote, with every quantity computed deterministically rather than supplied by the model.
 
-**Architecture:** Five sequential PRs. PR 1 lands the registered command with full plumbing and no business logic, so scope derivation, discovery and the two tenant-enablement gates are proven on day one. PR 2 and PR 3 add two independent pure-ish units — per-unit price resolution and geometry/quantity arithmetic — each testable in isolation. PR 4 joins them and calls Sales. PR 5 adds the `executeProposal` bridge and a temporary probe agent.
+**Architecture:** Five sequential PRs. PR 1 lands the registered command with full plumbing and no business logic. PR 2 and PR 3 add two independently testable units — per-unit variant price resolution and geometry/quantity arithmetic. PR 4 joins them and calls Sales, which is the first demoable milestone. PR 5 adds the `executeProposal` bridge and a temporary probe agent.
 
 **Tech Stack:** TypeScript, Next.js, MikroORM/PostgreSQL, Zod 4, Jest 30, Open Mercato 0.8.0 (Catalog, Customers, Sales, Workflows, Agent Orchestrator).
 
 **Spec:** `.ai/specs/2026-09-19-rfq-quote-create-command.md`
 
+---
+
+## Verified Baseline — the actual state of `origin/main`
+
+An earlier revision of this plan was written against the unmerged `feat/deal-document-links` branch and described commands and workflow steps that **do not exist on `main`**. Everything below was re-verified against `origin/main` at `680300a`. Check these before trusting any instruction that contradicts them.
+
+| Fact | Verified state on `main` |
+|---|---|
+| Commands in `src/modules/rfq_intake/commands/` | `analysis.ts` → `rfq_intake.requirements.match`; `pipeline.ts` → `rfq_intake.deal.advance`. **There is no `rfq_intake.plans.analyze`.** |
+| Workflow-safe declarations in `workflows.ts` | Exactly **one**: `rfq_intake.requirements.match`. `deal.advance` exists as a command but is *not* declared workflow-safe. |
+| Workflow graph (`RFQ_ANALYSIS_WORKFLOW_ID = 'rfq_intake.analysis'`) | `start → extract_pdf → match_catalog → end`, transitions `t_start`, `t_match`, `t_done`, `interpolation: 'strict'`. **No `mark_quoting`, `measure_plans` or `mark_review` steps.** |
+| `src/modules/rfq_intake/lib/` | `commandBus.ts`, `ensureContact.ts`, `pipeline.ts`, `processDefinition.ts`, `startProcess.ts`. No `ai-agents.ts` anywhere in the module. |
+| Module registration | `src/modules.ts:38` lists `sales` statically; `rfq_intake` is pushed at `:106` **inside the enterprise-flag block**, deliberately last so its inbox `create_quote` override wins. |
+| `.mercato/generated` | **Tracked in git.** `rfq_intake` appears in exactly one generated file (`app-modules-overrides.compiled.mjs`); no `rfq_intake` command id appears in any generated artifact. The committed build is the **flags-off** build. |
+
+### Pre-existing test failures — do not attribute these to this work
+
+`src/modules/rfq_intake/__tests__/rfq-intake-wiring.test.ts` fails **5 of 9** on a clean detached checkout of `origin/main` (680300a), all in the `rfq_intake inbox action registry` block. The installed `sales` `create_quote` definition wins over the `rfq_intake` override, so labels, payload schema and `normalizePayload` all resolve to the installed one.
+
+Cause: the committed generated registry is the flags-off build, so `rfq_intake` is not in it. Setting `OM_ENABLE_ENTERPRISE_MODULES=true OM_ENABLE_ENTERPRISE_MODULES_AGENTS=true` at *test* time does not help, because the test reads the committed artifact rather than regenerating.
+
+**Baseline to compare against: module-wide `5 failed / 63 passed`, and `5 failed / 4 passed` in that one suite.** A task is green when it does not move those numbers. Fixing them is out of scope here — it requires regenerating with the enterprise flags, which rewrites tracked artifacts and is a repo-wide decision, not a side effect of this feature.
+
 ## Global Constraints
 
-- `tenantId` and `organizationId` come **only** from `ctx` (`ctx.auth.tenantId`, `ctx.selectedOrganizationId ?? ctx.auth.orgId`). Missing scope is an error, never unrestricted access. Payload scope keys are stripped, never trusted.
-- The input schema is **non-strict**: unknown keys are stripped, following `src/modules/deal_links/commands/document-links.ts:8-17`.
+- `tenantId` and `organizationId` come **only** from `ctx` (`ctx.auth.tenantId`, `ctx.selectedOrganizationId ?? ctx.auth.orgId`). Missing scope is an error, never unrestricted access.
+- The input schema is **non-strict**: unknown keys are stripped, following `src/modules/deal_links/commands/document-links.ts`. Payload scope keys never reach a write.
 - `dealId` and `roomMeasurementsRunId` arrive from a language model and are re-read in derived scope; a miss fails closed.
 - Cross-module access is by scalar ID and owner-command call only. Never add an ORM relation from `rfq_intake` to an installed module.
-- Never edit `node_modules`, `.mercato/generated/**`, shipped migrations, or generated facts.
-- No new entity and no migration in this plan. Two invocations creating two quotes is an accepted, documented shortcut.
-- Prices resolve on the **variant**, never at product level: `catalog_product_variant_prices` rows created by `catalog_seed` all carry a `variantId`.
+- Never edit `node_modules`, shipped migrations, or generated facts by hand.
+- **Run `yarn generate` without the enterprise flags and expect a clean tree.** That reproduces the committed build. Running it *with* the flags rewrites tracked artifacts across the repo; do not do it as part of this feature.
+- No new entity and no migration anywhere in this plan. Two invocations creating two quotes is an accepted, documented shortcut.
+- Prices resolve on the **variant**: every `catalog_product_variant_prices` row created by `catalog_seed` carries a `variantId`, so a product-level lookup finds nothing.
 - Money is gross: the seed writes `unitPriceGross` with a VAT 8% `taxRateId`, so lines use `priceMode: 'gross'`.
-- A product's `defaultUnit` is the unit gate. A basis producing a different unit drops the item; never coerce and never substitute another product or variant.
+- A product's `defaultUnit` is the unit gate. A basis producing a different unit drops the item; never coerce, never substitute another product or variant.
 - Every shortcut gets an inline `// HACK(hackathon): <what, why, what breaks>`.
-- Gate after every slice: `yarn generate && yarn typecheck && yarn lint`.
+- Gate after every task: `yarn generate && yarn typecheck && yarn lint`, then the focused tests.
 
 ## File Structure
 
 | File | Responsibility | PR |
 |---|---|---|
-| `src/modules/rfq_intake/commands/quote-create.ts` | Input schema, scope derivation, deal/run verification, item loop, Sales call | 1, 4 |
-| `src/modules/rfq_intake/workflows.ts` | Add the workflow-safe registration entry | 1 |
+| `src/modules/rfq_intake/commands/quote-create.ts` | Input union, scope derivation, deal/run verification, item loop, Sales call | 1, 4 |
+| `src/modules/rfq_intake/workflows.ts` | One added workflow-safe declaration; in PR 5, one added step | 1, 5 |
 | `src/modules/rfq_intake/lib/catalogPricing.ts` | Variant resolution and unit-price lookup | 2 |
 | `src/modules/rfq_intake/lib/geometry.ts` | Pixel bridge, shoelace, distances, unit normalization | 3 |
 | `src/modules/rfq_intake/lib/basisResolver.ts` | Basis → quantity + unit over a set of V2 rooms | 3 |
 | `src/modules/rfq_intake/commands/apply-proposal.ts` | Loads the disposed proposal, calls `executeProposal` | 5 |
-| `src/modules/rfq_intake/ai-agents.ts` | The temporary probe agent | 5 |
+| `src/modules/rfq_intake/ai-agents.ts` | The temporary probe agent — a new file, the module has none | 5 |
 
-Tests live beside them in `src/modules/rfq_intake/__tests__/`, one file per unit, following the `makeCtx()` container-stub style of `__tests__/advance-command.test.ts`.
+Tests sit in `src/modules/rfq_intake/__tests__/`, one file per unit, following the `makeCtx()` container-stub style of `__tests__/advance-command.test.ts`.
 
 ---
 
-# PR 1 — The registered command, no business logic
+# PR 1 — The registered command, no business logic ✅ IMPLEMENTED
 
-**Deliverable:** `rfq_intake.quote.create` exists, is discoverable, derives scope, verifies the deal, and returns an explicit not-implemented result. Registered as workflow-safe so gates 1 and 2 can be satisfied immediately rather than discovered at demo time.
+Landed on branch `feat/rfq-quote-create-command`. Recorded here so the plan matches reality and the remaining PRs build on named interfaces.
 
-### Task 1: Input contract and scope derivation
+### Task 1: Input contract and scope derivation ✅ DONE
 
-**Files:**
-- Create: `src/modules/rfq_intake/commands/quote-create.ts`
-- Create: `src/modules/rfq_intake/__tests__/quote-create-command.test.ts`
+**Files:** `src/modules/rfq_intake/commands/quote-create.ts`, `src/modules/rfq_intake/__tests__/quote-create-command.test.ts`
 
-**Interfaces:**
-- Consumes: `CommandHandler`, `registerCommand` from `@open-mercato/shared/lib/commands`; `CrudHttpError` from `@open-mercato/shared/lib/crud/errors`.
-- Produces: `createQuoteCommand` (id `rfq_intake.quote.create`), `quoteCreateInputSchema`, and types `QuoteCreateInput`, `QuoteCreateResult = { quoteId: string | null; lineCount: number; warnings: string[] }`.
-
-- [ ] **Step 1: Write the failing test**
+**Produces, relied on by every later task:**
 
 ```ts
-import { describe, expect, it } from '@jest/globals'
-import { createQuoteCommand } from '../commands/quote-create'
-
-const tenantId = '11111111-1111-4111-8111-111111111111'
-const organizationId = '22222222-2222-4222-8222-222222222222'
-const dealId = '33333333-3333-4333-8333-333333333333'
-const runId = '44444444-4444-4444-8444-444444444444'
-const productId = '55555555-5555-4555-8555-555555555555'
-
-function makeCtx(overrides: { deal?: unknown } = {}) {
-  return {
-    auth: { tenantId, orgId: organizationId },
-    selectedOrganizationId: organizationId,
-    container: {
-      resolve(name: string) {
-        if (name === 'em') {
-          return {
-            fork: () => ({
-              findOne: async () => ('deal' in overrides ? overrides.deal : { id: dealId }),
-            }),
-          }
-        }
-        throw new Error(`unexpected resolve ${name}`)
-      },
-    },
-  } as never
-}
-
-const validInput = {
-  dealId,
-  roomMeasurementsRunId: runId,
-  items: [{ catalogProductId: productId, basis: 'count', count: 3 }],
-}
-
-describe('rfq_intake.quote.create input contract', () => {
-  it('strips scope keys from the payload so a model cannot choose its own tenant', async () => {
-    const parsed = (await import('../commands/quote-create')).quoteCreateInputSchema.parse({
-      ...validInput,
-      tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      organizationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-    })
-    expect(parsed).not.toHaveProperty('tenantId')
-    expect(parsed).not.toHaveProperty('organizationId')
-  })
-
-  it('requires roomIds for an area basis, which a flat optional field could not enforce', async () => {
-    const { quoteCreateInputSchema } = await import('../commands/quote-create')
-    expect(() =>
-      quoteCreateInputSchema.parse({
-        dealId, roomMeasurementsRunId: runId,
-        items: [{ catalogProductId: productId, basis: 'net_wall_area' }],
-      }),
-    ).toThrow()
-  })
-
-  it('rejects a count supplied alongside an area basis rather than ignoring it', async () => {
-    const { quoteCreateInputSchema } = await import('../commands/quote-create')
-    const parsed = quoteCreateInputSchema.parse({
-      dealId, roomMeasurementsRunId: runId,
-      items: [{ catalogProductId: productId, basis: 'floor_area', roomIds: ['room-1'], count: 4 }],
-    })
-    // The union member has no `count`, so the stray key is stripped, never acted on.
-    expect(parsed.items[0]).not.toHaveProperty('count')
-  })
-
-  it('fails closed when the runtime context carries no tenant', async () => {
-    const ctx = { auth: {}, container: { resolve: () => ({}) } } as never
-    await expect(createQuoteCommand.execute(validInput, ctx)).rejects.toThrow(/Tenant/)
-  })
-
-  it('fails closed when the deal is not in the derived scope', async () => {
-    await expect(createQuoteCommand.execute(validInput, makeCtx({ deal: null }))).rejects.toThrow(/Deal/)
-  })
-
-  it('returns an explicit not-implemented result rather than pretending success', async () => {
-    const result = await createQuoteCommand.execute(validInput, makeCtx())
-    expect(result).toEqual({ quoteId: null, lineCount: 0, warnings: ['quote_creation_not_implemented'] })
-  })
-})
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `yarn test src/modules/rfq_intake/__tests__/quote-create-command.test.ts`
-Expected: FAIL — cannot find module `../commands/quote-create`.
-
-- [ ] **Step 3: Write the minimal implementation**
-
-```ts
-import type { EntityManager } from '@mikro-orm/postgresql'
-import type { CommandHandler, CommandRuntimeContext } from '@open-mercato/shared/lib/commands'
-import { registerCommand } from '@open-mercato/shared/lib/commands'
-import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
-import { CustomerDeal } from '@open-mercato/core/modules/customers/data/entities'
-import { z } from 'zod'
-
-/**
- * Non-strict on purpose: unknown keys are STRIPPED rather than rejected. The payload
- * is authored by a language model and may carry `tenantId`/`organizationId`; stripping
- * them here is what makes it impossible to write into someone else's scope by asking.
- */
-/** Fields every item carries, whatever its basis. */
-const itemCommon = {
-  catalogProductId: z.string().uuid(),
-  variantId: z.string().uuid().optional(),
-  note: z.string().max(1000).optional(),
-}
-
-const roomIds = z.array(z.string().min(1).max(200)).min(1).max(200)
-
-/**
- * Discriminated on `basis`, which is the single word the agent was already choosing —
- * so the union costs the model no extra decision while making `roomIds` REQUIRED where
- * it means something instead of an optional that silently does nothing.
- *
- * This is also the extension point. A future work type (`floor_perimeter`,
- * `opening_perimeter`, `wall_run_length`, `same_as`) arrives as one more member with
- * its own fields, rather than as another `field?` that most bases would ignore.
- */
-const quoteItemSchema = z.discriminatedUnion('basis', [
-  z.object({ ...itemCommon, basis: z.literal('floor_area'), roomIds }),
-  z.object({ ...itemCommon, basis: z.literal('gross_wall_area'), roomIds }),
-  z.object({ ...itemCommon, basis: z.literal('net_wall_area'), roomIds }),
-  z.object({ ...itemCommon, basis: z.literal('count'), count: z.number().int().positive().max(10_000) }),
-  z.object({
-    ...itemCommon,
-    basis: z.literal('given'),
-    given: z.object({ value: z.number().positive(), unit: z.enum(['m2', 'mb', 'szt', 'kpl']) }),
-  }),
-])
-
-export const quoteCreateInputSchema = z.object({
-  dealId: z.string().uuid(),
-  roomMeasurementsRunId: z.string().uuid(),
-  items: z.array(quoteItemSchema).min(1).max(100),
-})
-
-export type QuoteCreateInput = z.infer<typeof quoteCreateInputSchema>
+export const quoteCreateInputSchema: z.ZodType   // { dealId, roomMeasurementsRunId, items }
+export type QuoteCreateInput
+export type QuoteItemInput                       // one member of the basis union
 export type QuoteCreateResult = { quoteId: string | null; lineCount: number; warnings: string[] }
-
-export function ensureScope(ctx: CommandRuntimeContext): { tenantId: string; organizationId: string } {
-  const tenantId = ctx.auth?.tenantId ?? null
-  if (!tenantId) throw new CrudHttpError(400, { error: 'Tenant context is required' })
-  const organizationId = ctx.selectedOrganizationId ?? ctx.auth?.orgId ?? null
-  if (!organizationId) throw new CrudHttpError(400, { error: 'Organization context is required' })
-  return { tenantId, organizationId }
-}
-
-const createQuoteCommand: CommandHandler<Record<string, unknown>, QuoteCreateResult> = {
-  id: 'rfq_intake.quote.create',
-  async execute(rawInput, ctx) {
-    const input = quoteCreateInputSchema.parse(rawInput)
-    const scope = ensureScope(ctx)
-    const em = (ctx.container.resolve('em') as EntityManager).fork()
-
-    // The id comes from a model and is untrusted: the deal is re-read inside the
-    // derived scope, exactly as `inbox-actions.ts:102` calls the owner's command
-    // rather than touching `customer_deals` itself.
-    const deal = await em.findOne(CustomerDeal, { id: input.dealId, ...scope, deletedAt: null })
-    if (!deal) throw new CrudHttpError(404, { error: 'Deal not found' })
-
-    // HACK(hackathon): plumbing only. PR 4 replaces this with priced lines and the
-    // Sales call. What breaks until then: the command never produces a quote.
-    return { quoteId: null, lineCount: 0, warnings: ['quote_creation_not_implemented'] }
-  },
-}
-
-registerCommand(createQuoteCommand)
-
-export { createQuoteCommand }
+export function ensureScope(ctx: CommandRuntimeContext): { tenantId: string; organizationId: string }
+export const createQuoteCommand                  // id 'rfq_intake.quote.create'
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+The item schema is `z.discriminatedUnion('basis', [...])` over `floor_area`, `gross_wall_area`, `net_wall_area` (each requiring `roomIds`), `count` (requiring `count`) and `given` (requiring `given: { value, unit }`). The handler parses, derives scope, re-reads `CustomerDeal` in that scope, and returns `{ quoteId: null, lineCount: 0, warnings: ['quote_creation_not_implemented'] }`.
 
-Run: `yarn test src/modules/rfq_intake/__tests__/quote-create-command.test.ts`
-Expected: PASS — 4 tests.
+- [x] 8 tests pass: scope-key stripping, `roomIds` required for an area basis, a stray `count` on an area basis being dropped, empty item list rejected, missing tenant, missing organization, foreign deal, and the not-implemented result.
 
-- [ ] **Step 5: Commit**
+### Task 2: Make the command reachable ✅ DONE
 
-```bash
-git add src/modules/rfq_intake/commands/quote-create.ts src/modules/rfq_intake/__tests__/quote-create-command.test.ts
-git commit -m "feat(rfq_intake): add the quote create command contract and scope guard"
-```
+**Files:** `src/modules/rfq_intake/workflows.ts`, `src/modules/rfq_intake/__tests__/workflow-safe-commands.test.ts`
 
-### Task 2: Make the command reachable
-
-**Files:**
-- Modify: `src/modules/rfq_intake/workflows.ts:16-32` (the `registerWorkflowSafeCommands` array)
-- Modify: `src/modules/rfq_intake/__tests__/rfq-intake-wiring.test.ts`
-
-**Interfaces:**
-- Consumes: `createQuoteCommand` from Task 1.
-- Produces: the command id present in `listWorkflowSafeCommands()`, which is gate 1 of the five in the spec.
-
-- [ ] **Step 1: Write the failing test**
-
-Append to `__tests__/rfq-intake-wiring.test.ts`:
-
-```ts
-it('declares the quote command workflow-safe, because the agent vocabulary is built from that list', async () => {
-  await import('../workflows')
-  const { listWorkflowSafeCommands } = await import(
-    '@open-mercato/core/modules/workflows/lib/workflow-safe-commands'
-  )
-  const entry = listWorkflowSafeCommands().find((e) => e.commandId === 'rfq_intake.quote.create')
-  expect(entry).toBeDefined()
-  expect(entry?.requiredFeatures).toEqual(['customers.deals.manage', 'sales.quotes.manage'])
-})
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `yarn test src/modules/rfq_intake/__tests__/rfq-intake-wiring.test.ts`
-Expected: FAIL — `entry` is `undefined`.
-
-- [ ] **Step 3: Add the registration entry**
-
-Add as a fourth element of the existing `registerWorkflowSafeCommands([...])` array in `workflows.ts`:
+Added as a **second** element of the existing one-element array — not a fourth, which is what the earlier revision of this plan wrongly claimed:
 
 ```ts
   {
@@ -284,21 +101,30 @@ Add as a fourth element of the existing `registerWorkflowSafeCommands([...])` ar
   },
 ```
 
-- [ ] **Step 4: Run tests and the gate**
+- [x] 3 tests pass: the declaration exists with those features, the existing matcher declaration survives, and both `rfq_intake` entries are opt-in (`defaultEnabled` unset) — gate 2.
 
-Run: `yarn test src/modules/rfq_intake/__tests__/ && yarn generate && yarn typecheck && yarn lint`
-Expected: all PASS.
+### Task 3: Close out PR 1
 
-- [ ] **Step 5: Commit and open the PR**
+- [ ] **Step 1: Confirm the gate and the baseline**
 
 ```bash
-git add src/modules/rfq_intake/workflows.ts src/modules/rfq_intake/__tests__/rfq-intake-wiring.test.ts
-git commit -m "feat(rfq_intake): declare the quote command workflow-safe"
+yarn generate && yarn typecheck && yarn lint
+yarn test src/modules/rfq_intake/__tests__/
 ```
 
-- [ ] **Step 6: Enable the command for the demo tenant and record that it was done**
+Expected: `generate` leaves the tree clean; typecheck silent; lint `0 errors, 9 warnings` (all pre-existing, none in `rfq_intake`); tests `5 failed / 63 passed` — the baseline above, unchanged.
 
-The entry is deliberately not `defaultEnabled`, so nothing runs until a tenant enables it once in the workflow-commands settings. Do this now rather than at the end — it is the failure the spec calls a demo-killer, and it fails as a silent `skipped`. Note in the PR description which tenant was enabled.
+- [ ] **Step 2: Squash the WIP commit**
+
+```bash
+git rebase -i origin/main    # fold "wip: task 2 workflow-safe registration" into a real message
+```
+
+- [ ] **Step 3: Enable the command for the demo tenant**
+
+The entry is deliberately not `defaultEnabled`, so nothing runs until a tenant switches it on once in workflow-command settings. Do it now, not at the end: it is gate 2, it fails as a silent `skipped`, and it is the failure the spec calls a demo-killer. Record which tenant in the PR description.
+
+- [ ] **Step 4: Open the PR**, stating the pre-existing 5 failures with the baseline numbers so a reviewer does not chase them.
 
 ---
 
@@ -306,14 +132,14 @@ The entry is deliberately not `defaultEnabled`, so nothing runs until a tenant e
 
 **Deliverable:** given a product, an optional variant and a quantity, return the authoritative gross unit price in scope, or a typed refusal. No quote, no geometry.
 
-### Task 3: Variant resolution and price lookup
+### Task 4: Variant resolution and price lookup
 
 **Files:**
 - Create: `src/modules/rfq_intake/lib/catalogPricing.ts`
 - Create: `src/modules/rfq_intake/__tests__/catalog-pricing.test.ts`
 
 **Interfaces:**
-- Consumes: `catalogPricingService` from the container (registered in `catalog/di.ts:13`); entities `CatalogProduct`, `CatalogProductVariant`, `CatalogProductPrice` from `@open-mercato/core/modules/catalog/data/entities`.
+- Consumes: `catalogPricingService` from the container (registered in `node_modules/@open-mercato/core/src/modules/catalog/di.ts:13`); entities `CatalogProduct`, `CatalogProductVariant`, `CatalogProductPrice` and helper `resolvePriceVariantId` from `@open-mercato/core/modules/catalog/{data/entities,lib/pricing}`.
 - Produces:
 
 ```ts
@@ -325,7 +151,9 @@ export type PricedUnit = {
   defaultUnit: string | null
   productTitle: string
 }
-export type PriceFailure = { reason: 'product_not_found' | 'variant_not_found' | 'variant_foreign' | 'no_price' | 'price_identity_mismatch' }
+export type PriceFailure = {
+  reason: 'product_not_found' | 'variant_not_found' | 'variant_foreign' | 'no_price' | 'price_identity_mismatch'
+}
 export async function resolveUnitPrice(
   em: EntityManager,
   container: { resolve: (name: string) => unknown },
@@ -348,23 +176,6 @@ const productId = '55555555-5555-4555-8555-555555555555'
 const defaultVariantId = '66666666-6666-4666-8666-666666666666'
 const otherVariantId = '77777777-7777-4777-8777-777777777777'
 
-function makeEm(rows: { product?: unknown; variants?: unknown[]; prices?: unknown[] }) {
-  return {
-    findOne: async (entity: { name: string }, where: Record<string, unknown>) => {
-      if (entity.name === 'CatalogProduct') return rows.product ?? null
-      if (entity.name === 'CatalogProductVariant') {
-        return (rows.variants ?? []).find((v: any) => (where.id ? v.id === where.id : v.isDefault)) ?? null
-      }
-      return null
-    },
-    find: async () => rows.prices ?? [],
-  } as never
-}
-
-function makeContainer(resolved: unknown) {
-  return { resolve: (name: string) => (name === 'catalogPricingService' ? { resolvePrice: async () => resolved } : null) }
-}
-
 const product = { id: productId, title: 'Malowanie ścian i sufitów', defaultUnit: 'm2' }
 const defaultVariant = { id: defaultVariantId, isDefault: true, isActive: true, product: { id: productId } }
 const priceRow = {
@@ -376,14 +187,30 @@ const priceRow = {
   variant: { id: defaultVariantId },
 }
 
+function makeEm(rows: { product?: unknown; variant?: unknown; prices?: unknown[] }) {
+  return {
+    findOne: async (entity: { name: string }) =>
+      entity.name === 'CatalogProduct' ? (rows.product ?? null) : (rows.variant ?? null),
+    find: async () => rows.prices ?? [],
+  } as never
+}
+
+function makeContainer(resolved: unknown) {
+  return {
+    resolve: (name: string) =>
+      name === 'catalogPricingService' ? { resolvePrice: async () => resolved } : null,
+  }
+}
+
 describe('resolveUnitPrice', () => {
   it('falls back to the default variant, which the seed sets for every service', async () => {
     const result = await resolveUnitPrice(
-      makeEm({ product, variants: [defaultVariant], prices: [priceRow] }),
+      makeEm({ product, variant: defaultVariant, prices: [priceRow] }),
       makeContainer(priceRow),
       scope,
       { productId, quantity: 12 },
     )
+
     expect(result).toEqual({
       variantId: defaultVariantId,
       currencyCode: 'PLN',
@@ -397,33 +224,49 @@ describe('resolveUnitPrice', () => {
   it('refuses a variant belonging to another product instead of substituting one', async () => {
     const foreign = { id: otherVariantId, isDefault: false, isActive: true, product: { id: 'another-product' } }
     const result = await resolveUnitPrice(
-      makeEm({ product, variants: [foreign], prices: [priceRow] }),
+      makeEm({ product, variant: foreign, prices: [priceRow] }),
       makeContainer(priceRow),
       scope,
       { productId, variantId: otherVariantId, quantity: 1 },
     )
+
     expect(result).toEqual({ reason: 'variant_foreign' })
   })
 
-  it('refuses when the resolver returns a price for a different variant', async () => {
+  it('refuses when the resolver hands back a price for a different variant', async () => {
+    // A pricing extension may adjust the amount for the same identity. Returning a
+    // different variant would quietly quote another product.
     const strayPrice = { ...priceRow, variant: { id: otherVariantId } }
     const result = await resolveUnitPrice(
-      makeEm({ product, variants: [defaultVariant], prices: [priceRow] }),
+      makeEm({ product, variant: defaultVariant, prices: [priceRow] }),
       makeContainer(strayPrice),
       scope,
       { productId, quantity: 1 },
     )
+
     expect(result).toEqual({ reason: 'price_identity_mismatch' })
   })
 
   it('refuses when the variant has no price row at all', async () => {
     const result = await resolveUnitPrice(
-      makeEm({ product, variants: [defaultVariant], prices: [] }),
+      makeEm({ product, variant: defaultVariant, prices: [] }),
       makeContainer(null),
       scope,
       { productId, quantity: 1 },
     )
+
     expect(result).toEqual({ reason: 'no_price' })
+  })
+
+  it('refuses an unknown product before touching pricing', async () => {
+    const result = await resolveUnitPrice(
+      makeEm({ product: null }),
+      makeContainer(priceRow),
+      scope,
+      { productId, quantity: 1 },
+    )
+
+    expect(result).toEqual({ reason: 'product_not_found' })
   })
 })
 ```
@@ -442,8 +285,11 @@ import {
   CatalogProductPrice,
   CatalogProductVariant,
 } from '@open-mercato/core/modules/catalog/data/entities'
-import type { CatalogPricingService, PriceRow } from '@open-mercato/core/modules/catalog/services/catalogPricingService'
 import { resolvePriceVariantId } from '@open-mercato/core/modules/catalog/lib/pricing'
+import type {
+  CatalogPricingService,
+  PriceRow,
+} from '@open-mercato/core/modules/catalog/services/catalogPricingService'
 
 export type PricedUnit = {
   variantId: string
@@ -465,8 +311,7 @@ function variantProductId(variant: { product?: { id: string } | string | null })
 /**
  * Prices live on the VARIANT. `catalog_seed` writes every row through
  * `catalog.prices.create` with a `variantId` into `catalog_product_variant_prices`,
- * so a product-level lookup (`productVariantId = null`) finds nothing against demo
- * data — that is the correction this module exists to carry.
+ * so a product-level lookup finds nothing against demo data.
  */
 export async function resolveUnitPrice(
   em: EntityManager,
@@ -479,7 +324,12 @@ export async function resolveUnitPrice(
 
   const variant = args.variantId
     ? await em.findOne(CatalogProductVariant, { id: args.variantId, ...scope, deletedAt: null })
-    : await em.findOne(CatalogProductVariant, { ...scope, product: args.productId, isDefault: true, deletedAt: null })
+    : await em.findOne(CatalogProductVariant, {
+        ...scope,
+        product: args.productId,
+        isDefault: true,
+        deletedAt: null,
+      })
   if (!variant) return { reason: 'variant_not_found' }
   if (variantProductId(variant) !== args.productId) return { reason: 'variant_foreign' }
 
@@ -493,9 +343,6 @@ export async function resolveUnitPrice(
   const pricing = container.resolve('catalogPricingService') as CatalogPricingService
   const resolved = await pricing.resolvePrice(rows, { quantity: args.quantity, date: new Date() })
   if (!resolved) return { reason: 'no_price' }
-
-  // A pricing extension may adjust the amount for the same identity. It may not hand
-  // back a different variant — that would silently quote another product.
   if (resolvePriceVariantId(resolved) !== variant.id) return { reason: 'price_identity_mismatch' }
   if (!resolved.unitPriceGross) return { reason: 'no_price' }
 
@@ -513,7 +360,7 @@ export async function resolveUnitPrice(
 - [ ] **Step 4: Run tests and the gate**
 
 Run: `yarn test src/modules/rfq_intake/__tests__/catalog-pricing.test.ts && yarn typecheck && yarn lint`
-Expected: PASS — 4 tests.
+Expected: PASS — 5 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -526,30 +373,17 @@ git commit -m "feat(rfq_intake): resolve the authoritative variant unit price"
 
 # PR 3 — Pure quantity arithmetic
 
-**Deliverable:** two dependency-free modules that turn a `property_documents.room_measurements` V2 result into a quantity and a unit. No database, no container, no Sales.
+**Deliverable:** two dependency-free modules turning a `property_documents.room_measurements` V2 result into a quantity and a unit. No database, no container, no Sales. Writable before PR #35 merges.
 
-### Task 4: The geometry primitives
+### Task 5: Geometry primitives
 
 **Files:**
 - Create: `src/modules/rfq_intake/lib/geometry.ts`
 - Create: `src/modules/rfq_intake/__tests__/geometry.test.ts`
 
 **Interfaces:**
-- Consumes: nothing at runtime. Types mirror the V2 contract in `src/modules/property_documents/room-measurements-contract.ts`; import them once PR #35 merges, and keep a local structural type until then.
-- Produces:
-
-```ts
-export type Point = { x: number; y: number }
-export type LinearUnit = 'mm' | 'cm' | 'm' | 'in' | 'ft'
-export type AreaUnit = 'mm2' | 'cm2' | 'm2' | 'in2' | 'ft2'
-export function toMetres(value: number, unit: LinearUnit): number
-export function toSquareMetres(value: number, unit: AreaUnit): number
-export function metresPerPixel(c: Calibration, imageWidthPx: number, imageHeightPx: number): number | null
-export function calibrationAgreement(values: number[]): boolean
-export function polygonAreaNormalised(points: Point[]): number
-export function polygonAreaSquareMetres(outer: Point[], holes: Point[][], mpp: number, w: number, h: number): number
-export function segmentLengthMetres(a: Point, b: Point, mpp: number, w: number, h: number): number
-```
+- Consumes: nothing at runtime.
+- Produces: `Point`, `LinearUnit`, `AreaUnit`, `Calibration`, `toMetres`, `toSquareMetres`, `metresPerPixel`, `calibrationAgreement`, `polygonAreaNormalised`, `polygonAreaSquareMetres`, `segmentLengthMetres`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -567,6 +401,12 @@ import {
 
 const W = 1000
 const H = 500
+const rect = [
+  { x: 0.1, y: 0.1 },
+  { x: 0.5, y: 0.1 },
+  { x: 0.5, y: 0.5 },
+  { x: 0.1, y: 0.5 },
+]
 
 describe('unit normalization', () => {
   it('converts every linear unit the V2 contract allows', () => {
@@ -584,47 +424,53 @@ describe('unit normalization', () => {
 describe('the pixel bridge', () => {
   it('derives metres per pixel from a calibration spanning half the image width', () => {
     // 0.5 of 1000px = 500px represents 5 m, so 0.01 m/px.
-    const mpp = metresPerPixel(
-      { start: { x: 0.25, y: 0.5 }, end: { x: 0.75, y: 0.5 }, realLength: { value: 5, unit: 'm' } },
-      W,
-      H,
-    )
-    expect(mpp).toBeCloseTo(0.01)
+    expect(
+      metresPerPixel(
+        { start: { x: 0.25, y: 0.5 }, end: { x: 0.75, y: 0.5 }, realLength: { value: 5, unit: 'm' } },
+        W,
+        H,
+      ),
+    ).toBeCloseTo(0.01)
+  })
+
+  it('multiplies each axis by its own dimension, so a non-square image is not skewed', () => {
+    // Purely vertical: 0.5 of 500px = 250px for 5 m → 0.02 m/px, not 0.01.
+    expect(
+      metresPerPixel(
+        { start: { x: 0.5, y: 0.25 }, end: { x: 0.5, y: 0.75 }, realLength: { value: 5, unit: 'm' } },
+        W,
+        H,
+      ),
+    ).toBeCloseTo(0.02)
   })
 
   it('returns null for a degenerate calibration rather than dividing by zero', () => {
-    const mpp = metresPerPixel(
-      { start: { x: 0.5, y: 0.5 }, end: { x: 0.5, y: 0.5 }, realLength: { value: 5, unit: 'm' } },
-      W,
-      H,
-    )
-    expect(mpp).toBeNull()
+    expect(
+      metresPerPixel(
+        { start: { x: 0.5, y: 0.5 }, end: { x: 0.5, y: 0.5 }, realLength: { value: 5, unit: 'm' } },
+        W,
+        H,
+      ),
+    ).toBeNull()
   })
 
   it('accepts agreeing calibrations and rejects disagreeing ones', () => {
-    expect(calibrationAgreement([0.0100, 0.0101])).toBe(true)
-    expect(calibrationAgreement([0.0100, 0.0140])).toBe(false)
+    expect(calibrationAgreement([0.01, 0.0101])).toBe(true)
+    expect(calibrationAgreement([0.01, 0.014])).toBe(false)
   })
 })
 
 describe('polygon area', () => {
-  const rect = [
-    { x: 0.1, y: 0.1 },
-    { x: 0.5, y: 0.1 },
-    { x: 0.5, y: 0.5 },
-    { x: 0.1, y: 0.5 },
-  ]
-
   it('computes the normalised shoelace area of a rectangle', () => {
-    expect(polygonAreaNormalised(rect)).toBeCloseTo(0.4 * 0.4)
+    expect(polygonAreaNormalised(rect)).toBeCloseTo(0.16)
   })
 
   it('is orientation independent, so a clockwise boundary is not negative', () => {
-    expect(polygonAreaNormalised([...rect].reverse())).toBeCloseTo(0.4 * 0.4)
+    expect(polygonAreaNormalised([...rect].reverse())).toBeCloseTo(0.16)
   })
 
   it('scales to square metres through the pixel bridge', () => {
-    // 0.4·1000 = 400px by 0.4·500 = 200px, at 0.01 m/px → 4 m × 2 m = 8 m².
+    // 400px × 200px at 0.01 m/px → 4 m × 2 m = 8 m².
     expect(polygonAreaSquareMetres(rect, [], 0.01, W, H)).toBeCloseTo(8)
   })
 
@@ -650,8 +496,8 @@ describe('polygon area', () => {
 
 describe('segment length', () => {
   it('measures a diagonal through the same bridge', () => {
-    // Δ = (0.3·1000, 0.4·500) = (300, 200) px → hypot 360.55 px → 3.6055 m.
-    expect(segmentLengthMetres({ x: 0.1, y: 0.1 }, { x: 0.4, y: 0.5 }, 0.01, W, H)).toBeCloseTo(3.6055, 3)
+    // Δ = (300, 200) px → hypot 360.555 px → 3.61 m after rounding.
+    expect(segmentLengthMetres({ x: 0.1, y: 0.1 }, { x: 0.4, y: 0.5 }, 0.01, W, H)).toBeCloseTo(3.61, 2)
   })
 })
 ```
@@ -682,7 +528,7 @@ const AREA_TO_SQUARE_METRES: Record<AreaUnit, number> = {
   ft2: 0.09290304,
 }
 
-/** Tolerance for two calibrations describing the same drawing. 2% absorbs pixel rounding. */
+/** Two calibrations describing one drawing may differ by this much before we distrust both. */
 const CALIBRATION_TOLERANCE = 0.02
 
 export function toMetres(value: number, unit: LinearUnit): number {
@@ -696,19 +542,16 @@ export function toSquareMetres(value: number, unit: AreaUnit): number {
 /**
  * V2 coordinates are normalised to the IMAGE, so x and y are divided by different
  * numbers. Recovering pixels means multiplying each axis by its own dimension before
- * measuring the distance — averaging the two would be wrong on any non-square image.
+ * measuring: averaging the two would skew every non-square drawing.
  */
 export function metresPerPixel(c: Calibration, imageWidthPx: number, imageHeightPx: number): number | null {
-  const dx = (c.end.x - c.start.x) * imageWidthPx
-  const dy = (c.end.y - c.start.y) * imageHeightPx
-  const px = Math.hypot(dx, dy)
+  const px = Math.hypot((c.end.x - c.start.x) * imageWidthPx, (c.end.y - c.start.y) * imageHeightPx)
   if (!Number.isFinite(px) || px <= 0) return null
   const metres = toMetres(c.realLength.value, c.realLength.unit)
   if (!Number.isFinite(metres) || metres <= 0) return null
   return metres / px
 }
 
-/** Two or more calibrations must describe the same scale, or the drawing is not trustworthy. */
 export function calibrationAgreement(values: number[]): boolean {
   if (values.length < 2) return true
   const min = Math.min(...values)
@@ -716,7 +559,7 @@ export function calibrationAgreement(values: number[]): boolean {
   return (max - min) / max <= CALIBRATION_TOLERANCE
 }
 
-/** Shoelace, absolute so that boundary winding order does not change the sign. */
+/** Shoelace, absolute so boundary winding order does not flip the sign. */
 export function polygonAreaNormalised(points: Point[]): number {
   if (points.length < 3) return 0
   let sum = 0
@@ -735,8 +578,7 @@ export function polygonAreaSquareMetres(
   imageWidthPx: number,
   imageHeightPx: number,
 ): number {
-  const pxPerNormalisedUnit = imageWidthPx * imageHeightPx
-  const factor = pxPerNormalisedUnit * metresPerPx * metresPerPx
+  const factor = imageWidthPx * imageHeightPx * metresPerPx * metresPerPx
   const gross = polygonAreaNormalised(outer) * factor
   const voids = holes.reduce((acc, hole) => acc + polygonAreaNormalised(hole) * factor, 0)
   return Math.max(0, round2(gross - voids))
@@ -749,8 +591,7 @@ export function segmentLengthMetres(
   imageWidthPx: number,
   imageHeightPx: number,
 ): number {
-  const px = Math.hypot((b.x - a.x) * imageWidthPx, (b.y - a.y) * imageHeightPx)
-  return round2(px * metresPerPx)
+  return round2(Math.hypot((b.x - a.x) * imageWidthPx, (b.y - a.y) * imageHeightPx) * metresPerPx)
 }
 
 function round2(value: number): number {
@@ -761,7 +602,7 @@ function round2(value: number): number {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `yarn test src/modules/rfq_intake/__tests__/geometry.test.ts`
-Expected: PASS — 12 tests.
+Expected: PASS — 13 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -770,21 +611,23 @@ git add src/modules/rfq_intake/lib/geometry.ts src/modules/rfq_intake/__tests__/
 git commit -m "feat(rfq_intake): add pure geometry primitives for quantity derivation"
 ```
 
-### Task 5: Basis → quantity and unit
+### Task 6: Basis → quantity and unit
 
 **Files:**
 - Create: `src/modules/rfq_intake/lib/basisResolver.ts`
+- Create: `src/modules/rfq_intake/__tests__/fixtures/roomMeasurements.ts`
 - Create: `src/modules/rfq_intake/__tests__/basis-resolver.test.ts`
 
 **Interfaces:**
-- Consumes: every export of Task 4.
+- Consumes: every export of Task 5.
 - Produces:
 
 ```ts
 // `RoomMeasurementsResult` is the V2 `data` object from
 // `src/modules/property_documents/room-measurements-contract.ts` (PR #35). Until that
-// merges, declare a local structural type with the same shape in this file and swap the
-// declaration for an import afterwards — no call site changes.
+// merges, declare a local structural type of the same shape here and swap it for an
+// import afterwards; `workflows.ts:3` already imports across app modules, so the
+// cross-module import is an established pattern and no call site changes.
 export type Basis = 'floor_area' | 'gross_wall_area' | 'net_wall_area' | 'count' | 'given'
 export type QuantityOk = {
   ok: true
@@ -794,6 +637,7 @@ export type QuantityOk = {
   overriddenCount?: number
 }
 export type QuantityFailure = { ok: false; code: string }
+export const BASIS_SPECS: Record<Basis, { acceptedUnits: ReadonlyArray<'m2' | 'mb' | 'szt' | 'kpl'> }>
 export function acceptedUnitsFor(basis: Basis, givenUnit?: string): string[]
 export function resolveQuantity(
   result: RoomMeasurementsResult,
@@ -808,13 +652,11 @@ export function resolveQuantity(
 ): QuantityOk | QuantityFailure
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the fixture**
 
 ```ts
-import { describe, expect, it } from '@jest/globals'
-import { acceptedUnitsFor, resolveQuantity } from '../lib/basisResolver'
-
-const drawing = {
+// src/modules/rfq_intake/__tests__/fixtures/roomMeasurements.ts
+export const drawing = {
   imageWidthPx: 1000,
   imageHeightPx: 500,
   declaredUnit: null,
@@ -823,6 +665,7 @@ const drawing = {
   calibrations: [
     {
       id: 'cal-1',
+      kind: 'scale_bar',
       start: { x: 0.25, y: 0.5 },
       end: { x: 0.75, y: 0.5 },
       realLength: { value: 5, unit: 'm', method: 'printed', calculationEligibility: 'eligible' },
@@ -831,7 +674,7 @@ const drawing = {
   ],
 }
 
-function room(overrides: Record<string, unknown> = {}) {
+export function room(overrides: Record<string, unknown> = {}) {
   return {
     id: 'room-1',
     printedName: 'Salon',
@@ -879,9 +722,17 @@ function room(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function result(rooms: unknown[] = [room()]) {
+export function measurementResult(rooms: unknown[] = [room()]) {
   return { schemaVersion: '1', analysisStatus: 'complete', drawing, rooms, warnings: [] } as never
 }
+```
+
+- [ ] **Step 2: Write the failing test**
+
+```ts
+import { describe, expect, it } from '@jest/globals'
+import { acceptedUnitsFor, resolveQuantity } from '../lib/basisResolver'
+import { drawing, measurementResult, room } from './fixtures/roomMeasurements'
 
 describe('acceptedUnitsFor', () => {
   it('maps every area basis to m2 and count to both piece units', () => {
@@ -894,8 +745,7 @@ describe('acceptedUnitsFor', () => {
 
 describe('resolveQuantity', () => {
   it('computes floor area from the polygon when the drawing prints none', () => {
-    // 400px × 200px at 0.01 m/px = 8 m².
-    expect(resolveQuantity(result(), { basis: 'floor_area', roomIds: ['room-1'] })).toEqual({
+    expect(resolveQuantity(measurementResult(), { basis: 'floor_area', roomIds: ['room-1'] })).toEqual({
       ok: true, quantity: 8, unit: 'm2',
     })
   })
@@ -907,7 +757,7 @@ describe('resolveQuantity', () => {
         printedArea: { value: 14, unit: 'm2', basis: 'net', method: 'printed', calculationEligibility: 'eligible' },
       },
     })
-    expect(resolveQuantity(result([printed]), { basis: 'floor_area', roomIds: ['room-1'] })).toEqual({
+    expect(resolveQuantity(measurementResult([printed]), { basis: 'floor_area', roomIds: ['room-1'] })).toEqual({
       ok: true, quantity: 14, unit: 'm2',
     })
   })
@@ -919,147 +769,148 @@ describe('resolveQuantity', () => {
         printedArea: { value: 14, unit: 'm2', basis: 'unknown', method: 'printed', calculationEligibility: 'eligible' },
       },
     })
-    expect(resolveQuantity(result([ambiguous]), { basis: 'floor_area', roomIds: ['room-1'] })).toEqual({
+    expect(resolveQuantity(measurementResult([ambiguous]), { basis: 'floor_area', roomIds: ['room-1'] })).toEqual({
       ok: true, quantity: 8, unit: 'm2',
     })
   })
 
   it('computes gross wall area from length and the global ceiling height', () => {
-    expect(resolveQuantity(result(), { basis: 'gross_wall_area', roomIds: ['room-1'] })).toEqual({
+    // 4 m × 2.7 m = 10.8 m²
+    expect(resolveQuantity(measurementResult(), { basis: 'gross_wall_area', roomIds: ['room-1'] })).toEqual({
       ok: true, quantity: 10.8, unit: 'm2',
     })
   })
 
   it('subtracts openings for net wall area, which is what painting is priced on', () => {
     // 10.8 − (1.5 × 1.2) = 9.0
-    expect(resolveQuantity(result(), { basis: 'net_wall_area', roomIds: ['room-1'] })).toEqual({
+    expect(resolveQuantity(measurementResult(), { basis: 'net_wall_area', roomIds: ['room-1'] })).toEqual({
       ok: true, quantity: 9, unit: 'm2',
     })
   })
 
-  it('refuses wall area when no height is available, because a plan view has no vertical axis', () => {
+  it('refuses wall area with no height, because a plan view has no vertical axis', () => {
     const noHeight = room({ walls: [{ ...room().walls[0], usesGlobalHeight: false }] })
-    const noGlobal = { ...result([noHeight]), drawing: { ...drawing, globalCeilingHeight: null } } as never
+    const noGlobal = {
+      ...(measurementResult([noHeight]) as never as Record<string, unknown>),
+      drawing: { ...drawing, globalCeilingHeight: null },
+    } as never
     expect(resolveQuantity(noGlobal, { basis: 'gross_wall_area', roomIds: ['room-1'] })).toEqual({
       ok: false, code: 'ceiling_height_missing',
     })
   })
 
   it('refuses when no calibration exists and the value is not printed', () => {
-    const noCal = { ...result(), drawing: { ...drawing, calibrations: [] } } as never
+    const noCal = {
+      ...(measurementResult() as never as Record<string, unknown>),
+      drawing: { ...drawing, calibrations: [] },
+    } as never
     expect(resolveQuantity(noCal, { basis: 'floor_area', roomIds: ['room-1'] })).toEqual({
       ok: false, code: 'scale_missing',
     })
   })
 
   it('refuses a room whose readiness flag is not eligible', () => {
-    const blocked = room({ readiness: { floorArea: 'review_required', grossWallArea: 'eligible', netWallArea: 'eligible' } })
-    expect(resolveQuantity(result([blocked]), { basis: 'floor_area', roomIds: ['room-1'] })).toEqual({
+    const blocked = room({
+      readiness: { floorArea: 'review_required', grossWallArea: 'eligible', netWallArea: 'eligible' },
+      missingInputs: [{ code: 'floor_boundary_incomplete', targetId: 'room-1' }],
+    })
+    expect(resolveQuantity(measurementResult([blocked]), { basis: 'floor_area', roomIds: ['room-1'] })).toEqual({
       ok: false, code: 'floor_boundary_incomplete',
     })
   })
 
   it('refuses every basis when the image was not a floor plan', () => {
-    const notPlan = { ...result(), analysisStatus: 'not_floor_plan' } as never
+    const notPlan = {
+      ...(measurementResult() as never as Record<string, unknown>),
+      analysisStatus: 'not_floor_plan',
+    } as never
     expect(resolveQuantity(notPlan, { basis: 'floor_area', roomIds: ['room-1'] })).toEqual({
       ok: false, code: 'not_floor_plan',
     })
   })
 
   it('refuses an unknown room id rather than silently quoting nothing', () => {
-    expect(resolveQuantity(result(), { basis: 'floor_area', roomIds: ['room-9'] })).toEqual({
+    expect(resolveQuantity(measurementResult(), { basis: 'floor_area', roomIds: ['room-9'] })).toEqual({
       ok: false, code: 'room_not_found',
     })
   })
 
   it('sums the referenced rooms, so one line can cover a whole flat', () => {
     const second = { ...room(), id: 'room-2' }
-    expect(resolveQuantity(result([room(), second]), { basis: 'floor_area', roomIds: ['room-1', 'room-2'] })).toEqual({
-      ok: true, quantity: 16, unit: 'm2',
-    })
+    expect(
+      resolveQuantity(measurementResult([room(), second]), { basis: 'floor_area', roomIds: ['room-1', 'room-2'] }),
+    ).toEqual({ ok: true, quantity: 16, unit: 'm2' })
   })
 
   it('passes a plain count through, because sockets do not appear on a plan view', () => {
-    expect(resolveQuantity(result(), { basis: 'count', count: 7 })).toEqual({
+    expect(resolveQuantity(measurementResult(), { basis: 'count', count: 7 })).toEqual({
       ok: true, quantity: 7, unit: 'szt',
     })
   })
 
   it('derives a window count from openings and ignores the number the model supplied', () => {
-    // The room carries exactly one window; the model claimed five.
     expect(
-      resolveQuantity(result(), { basis: 'count', roomIds: ['room-1'], count: 5, derivedFrom: 'window' }),
+      resolveQuantity(measurementResult(), { basis: 'count', roomIds: ['room-1'], count: 5, derivedFrom: 'window' }),
     ).toEqual({ ok: true, quantity: 1, unit: 'szt', overriddenCount: 5 })
   })
 
   it('refuses a door count rather than inventing one when the room has no doors', () => {
     expect(
-      resolveQuantity(result(), { basis: 'count', roomIds: ['room-1'], derivedFrom: 'door' }),
+      resolveQuantity(measurementResult(), { basis: 'count', roomIds: ['room-1'], derivedFrom: 'door' }),
     ).toEqual({ ok: false, code: 'no_openings_of_kind' })
   })
 
   it('passes a given quantity through with its declared unit', () => {
-    expect(resolveQuantity(result(), { basis: 'given', given: { value: 68, unit: 'm2' } })).toEqual({
+    expect(resolveQuantity(measurementResult(), { basis: 'given', given: { value: 68, unit: 'm2' } })).toEqual({
       ok: true, quantity: 68, unit: 'm2',
     })
   })
 })
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 3: Run test to verify it fails**
 
 Run: `yarn test src/modules/rfq_intake/__tests__/basis-resolver.test.ts`
 Expected: FAIL — cannot find module `../lib/basisResolver`.
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 4: Implement**
 
-Structure the module around a table, not a switch, so a reserved basis lands as one row:
+Build the module around a table so a reserved basis lands as one row, not a new switch arm:
 
 ```ts
-type BasisSpec = {
-  acceptedUnits: ReadonlyArray<'m2' | 'mb' | 'szt' | 'kpl'>
-  resolve: (ctx: BasisContext) => QuantityOk | QuantityFailure
-}
-
-/**
- * Reserved but NOT implemented, named here so the work that adds them does not invent
- * a parallel vocabulary: `floor_perimeter` (+ excludeDoorways), `opening_perimeter`
- * (+ openingKind), `wall_run_length`, `same_as` (+ refItemIndex). Today there is no
- * linear basis at all, so the catalogue's `mb` services are reachable only via `given`.
- */
-export const BASIS_SPECS: Record<Basis, BasisSpec> = {
-  floor_area: { acceptedUnits: ['m2'], resolve: resolveFloorArea },
-  gross_wall_area: { acceptedUnits: ['m2'], resolve: resolveGrossWallArea },
-  net_wall_area: { acceptedUnits: ['m2'], resolve: resolveNetWallArea },
-  count: { acceptedUnits: ['szt', 'kpl'], resolve: resolveCount },
-  given: { acceptedUnits: ['m2', 'mb', 'szt', 'kpl'], resolve: resolveGiven },
-}
+export const BASIS_SPECS = {
+  floor_area: { acceptedUnits: ['m2'] },
+  gross_wall_area: { acceptedUnits: ['m2'] },
+  net_wall_area: { acceptedUnits: ['m2'] },
+  count: { acceptedUnits: ['szt', 'kpl'] },
+  given: { acceptedUnits: ['m2', 'mb', 'szt', 'kpl'] },
+} as const
 ```
 
-`acceptedUnitsFor` reads the table; `resolveQuantity` dispatches through it. Then implement each resolver so that:
+`acceptedUnitsFor` reads that table, returning `[givenUnit]` for `given`. `resolveQuantity` then applies, in order:
 
-1. `analysisStatus` outside `{complete, partial}` returns `{ ok: false, code: 'not_floor_plan' }` (use `'unreadable'` when that is the status).
-2. Each `roomIds` entry must match a `rooms[].id`; a miss returns `room_not_found`.
-3. The readiness flag for the basis must be `eligible`, otherwise return the first relevant `missingInputs[].code`, defaulting to `floor_boundary_incomplete` for floor and `wall_length_missing` for walls.
-4. `metresPerPixel` is computed for every calibration; `calibrationAgreement` must hold, otherwise `calibration_disagreement`. With no calibration, only `printed` values are usable and anything else returns `scale_missing`.
-5. `floor_area` uses `printedArea` when it is non-null, `eligible`, and `basis ∈ {gross, net}`, converting with `toSquareMetres`; otherwise `polygonAreaSquareMetres`.
-6. `gross_wall_area` sums `length × height` per wall, where `length` is the printed value when present and `segmentLengthMetres` otherwise, and height is `startHeight`/`endHeight` averaged when both exist, `drawing.globalCeilingHeight` when `usesGlobalHeight`, and otherwise `ceiling_height_missing`.
-7. `net_wall_area` subtracts `width × height` for every opening whose `wallId` names a wall of that room, clamped at zero.
-8. `count` with `derivedFrom` tallies `openings[]` of that `kind` across the referenced rooms, sets `overriddenCount` when a `count` was also supplied and differs from the tally, and returns `no_openings_of_kind` when the tally is zero. Without `derivedFrom` it returns the supplied `count` with unit `szt`, which is the socket and lighting-point case.
-9. `given` returns the supplied value and unit unchanged.
-10. Every value with `method === 'scale_derived'` is recomputed from `start`/`end` and compared against the supplied value; a relative difference above 2% returns `scale_derived_mismatch`.
+1. `analysisStatus` outside `{complete, partial}` → `{ ok: false, code: analysisStatus }`.
+2. `given` returns its value and unit unchanged; `count` without `derivedFrom` returns the supplied count as `szt`. Neither reads geometry.
+3. Every `roomIds` entry must match a `rooms[].id`; a miss → `room_not_found`.
+4. The readiness flag for the basis must be `eligible`; otherwise return the first `missingInputs[].code` for that room, defaulting to `floor_boundary_incomplete` for floor bases and `wall_length_missing` for wall bases.
+5. `metresPerPixel` is computed for every calibration and `calibrationAgreement` must hold, else `calibration_disagreement`. With no calibration only `printed` values are usable; needing any other → `scale_missing`.
+6. `floor_area`: use `printedArea` when non-null, `eligible` and `basis ∈ {gross, net}`, via `toSquareMetres`; otherwise `polygonAreaSquareMetres(outerBoundary, holes.map(h => h.boundary), mpp, w, h)`.
+7. `gross_wall_area`: sum `length × height` per wall. `length` is the printed value when present, else `segmentLengthMetres`. Height is the mean of `startHeight`/`endHeight` when both exist, else `drawing.globalCeilingHeight` when `usesGlobalHeight`, else `ceiling_height_missing`.
+8. `net_wall_area`: subtract `width × height` for each opening whose `wallId` names a wall of that room, clamped at zero. An opening with a null `wallId` in a referenced room → `opening_wall_ambiguous`, because silently skipping it would over-quote.
+9. `count` with `derivedFrom`: tally `openings[]` of that `kind` across the referenced rooms; zero → `no_openings_of_kind`; set `overriddenCount` when a supplied `count` differs from the tally.
+10. Any value with `method === 'scale_derived'` is recomputed from `start`/`end` and compared; a relative difference above 2% → `scale_derived_mismatch`.
 
 Sum across `roomIds` and round to two decimals.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 5: Run test to verify it passes**
 
 Run: `yarn test src/modules/rfq_intake/__tests__/basis-resolver.test.ts && yarn typecheck && yarn lint`
-Expected: PASS — 14 tests.
+Expected: PASS — 16 tests.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/modules/rfq_intake/lib/basisResolver.ts src/modules/rfq_intake/__tests__/basis-resolver.test.ts
+git add src/modules/rfq_intake/lib/basisResolver.ts src/modules/rfq_intake/__tests__/
 git commit -m "feat(rfq_intake): resolve quantity and unit from a measurement basis"
 ```
 
@@ -1067,81 +918,72 @@ git commit -m "feat(rfq_intake): resolve quantity and unit from a measurement ba
 
 # PR 4 — The priced quote draft
 
-**Deliverable:** the command loads the V2 run, resolves each item to a priced line, and creates one unsent Sales quote. This is the first demoable milestone: a quote appears from a hand-written payload, with no agent involved.
+**Deliverable:** the command loads the V2 run, resolves each item to a priced line, and creates one unsent Sales quote. First demoable milestone: a quote appears from a hand-written payload, with no agent involved.
 
-### Task 6: Load the room-measurements run in scope
+### Task 7: Load the room-measurements run in scope
 
 **Files:**
 - Modify: `src/modules/rfq_intake/commands/quote-create.ts`
 - Modify: `src/modules/rfq_intake/__tests__/quote-create-command.test.ts`
 
 **Interfaces:**
-- Consumes: `AgentRun` from `@open-mercato/enterprise/modules/agent_orchestrator/data/entities`.
-- Produces: `loadRoomMeasurements(em, scope, runId): Promise<RoomMeasurementsResult | null>` exported from the command module.
+- Consumes: `AgentRun` from `@open-mercato/enterprise/modules/agent_orchestrator/data/entities`; the fixture from Task 6.
+- Produces: `loadRoomMeasurements(em, scope, runId): Promise<RoomMeasurementsResult>` exported from the command module; throws `CrudHttpError(404)` when absent, foreign, or not terminal-ok.
 
 - [ ] **Step 1: Write the failing test**
 
+Extend `makeCtx` so the forked `em.findOne` dispatches on entity name, then:
+
 ```ts
 it('fails closed when the room-measurements run is not in the derived scope', async () => {
-  const ctx = makeCtx({ run: null })
-  await expect(createQuoteCommand.execute(validInput, ctx)).rejects.toThrow(/run/i)
+  await expect(createQuoteCommand.execute(validInput, makeCtx({ run: null }))).rejects.toThrow(/run/i)
 })
 
 it('rejects a run produced by a different agent, so any AgentRun id will not do', async () => {
-  const ctx = makeCtx({ run: { id: runId, agentId: 'property_documents.pdf_intake', status: 'ok', result: {} } })
-  await expect(createQuoteCommand.execute(validInput, ctx)).rejects.toThrow(/run/i)
+  const run = { id: runId, agentId: 'property_documents.pdf_intake', status: 'ok', result: {} }
+  await expect(createQuoteCommand.execute(validInput, makeCtx({ run }))).rejects.toThrow(/run/i)
 })
 
 it('rejects a run that has not terminated successfully', async () => {
-  const ctx = makeCtx({
-    run: { id: runId, agentId: 'property_documents.room_measurements', status: 'running', result: null },
-  })
-  await expect(createQuoteCommand.execute(validInput, ctx)).rejects.toThrow(/run/i)
+  const run = { id: runId, agentId: 'property_documents.room_measurements', status: 'running', result: null }
+  await expect(createQuoteCommand.execute(validInput, makeCtx({ run }))).rejects.toThrow(/run/i)
 })
 
-it('parses the accepted V2 envelope and exposes it to the item loop', async () => {
-  const ctx = makeCtx({
-    run: {
-      id: runId,
-      agentId: 'property_documents.room_measurements',
-      status: 'ok',
-      result: { kind: 'research', data: { schemaVersion: '1', analysisStatus: 'complete', drawing, rooms: [], warnings: [] } },
-    },
-  })
-  // No rooms means no items survive, which is a valid outcome and not a throw.
-  const result = await createQuoteCommand.execute(validInput, ctx)
+it('accepts the V2 envelope and returns no quote when it contains no rooms', async () => {
+  const run = {
+    id: runId,
+    agentId: 'property_documents.room_measurements',
+    status: 'ok',
+    result: { kind: 'research', data: measurementResult([]) },
+  }
+  const result = await createQuoteCommand.execute(validInput, makeCtx({ run }))
   expect(result.quoteId).toBeNull()
 })
 ```
 
-Extend `makeCtx` so its `em.fork()` returns a `findOne` that answers `CustomerDeal` and `AgentRun` separately, and reuse the `drawing` fixture from `basis-resolver.test.ts` by extracting it to `__tests__/fixtures/roomMeasurements.ts` in this step.
-
 - [ ] **Step 2: Run it and confirm it fails.**
-- [ ] **Step 3: Implement** the scoped `findOne` on `AgentRun` filtered by `id`, `tenantId`, `organizationId`, `agentId === 'property_documents.room_measurements'` and a terminal `ok` status, strict-parsing the stored result.
+- [ ] **Step 3: Implement** the scoped `findOne` on `AgentRun` filtered by `id`, `tenantId`, `organizationId`, `agentId === 'property_documents.room_measurements'` and a terminal `ok` status, then strict-parse `result.data`.
 - [ ] **Step 4: Run the file's tests.** Expected: PASS.
 - [ ] **Step 5: Commit** — `feat(rfq_intake): load the scoped room-measurements result`.
 
-### Task 7: Item loop, unit gate and Sales call
+### Task 8: Item loop, unit gate and the Sales call
 
 **Files:**
 - Modify: `src/modules/rfq_intake/commands/quote-create.ts`
 - Modify: `src/modules/rfq_intake/__tests__/quote-create-command.test.ts`
 
 **Interfaces:**
-- Consumes: `resolveQuantity` and `acceptedUnitsFor` (Task 5), `resolveUnitPrice` (Task 3), `runCommand` from `../lib/commandBus`.
-- Produces: the final `QuoteCreateResult` with a real `quoteId`.
+- Consumes: `resolveQuantity`, `acceptedUnitsFor` (Task 6), `resolveUnitPrice` (Task 4), `runCommand` from `../lib/commandBus`.
+- Produces: `QuoteCreateResult` carrying a real `quoteId`.
 
-- [ ] **Step 1: Write the failing tests**, one per behavior:
+- [ ] **Step 1: Write the failing tests**
 
 ```ts
 it('drops an item whose basis unit does not match the product, instead of coercing it', async () => {
   // REN-CAR-01 bills in `szt`; a floor_area basis yields m2.
-  const result = await createQuoteCommand.execute(
-    { dealId, roomMeasurementsRunId: runId, items: [{ catalogProductId: doorProductId, basis: 'floor_area', roomIds: ['room-1'] }] },
-    makeCtx(),
-  )
+  const result = await createQuoteCommand.execute(doorWithFloorAreaInput, makeCtx())
   expect(result.quoteId).toBeNull()
-  expect(result.warnings).toContain('unit_mismatch:' + doorProductId)
+  expect(result.warnings).toContain(`unit_mismatch:${doorProductId}`)
 })
 
 it('creates no quote when every item is dropped', async () => {
@@ -1155,7 +997,9 @@ it('calls sales.quotes.create once with gross lines and RFQ metadata', async () 
   expect(salesCalls).toHaveLength(1)
   expect(salesCalls[0].id).toBe('sales.quotes.create')
   expect(salesCalls[0].input.currencyCode).toBe('PLN')
-  expect(salesCalls[0].input.metadata).toEqual({ rfqDealId: dealId, roomMeasurementsRunId: runId, source: 'rfq_intake' })
+  expect(salesCalls[0].input.metadata).toEqual({
+    rfqDealId: dealId, roomMeasurementsRunId: runId, source: 'rfq_intake',
+  })
   expect(salesCalls[0].input.lines[0]).toMatchObject({
     kind: 'service', productId: paintProductId, quantity: 9, quantityUnit: 'm2',
     unitPriceGross: '40.0000', priceMode: 'gross', currencyCode: 'PLN',
@@ -1171,10 +1015,11 @@ it('drops outliers when lines resolve to mixed currencies', async () => {
 ```
 
 - [ ] **Step 2: Run them and confirm they fail.**
-- [ ] **Step 3: Implement** the loop: for each item call `resolveQuantity`, then `resolveUnitPrice` with that quantity; compare the produced unit against `acceptedUnitsFor(...)` and the product's `defaultUnit`; drop with a bounded warning on any failure. Pick the majority currency, drop outliers, and when at least one line survives call `runCommand(ctx, 'sales.quotes.create', {...})` with `tenantId`, `organizationId`, `currencyCode`, `metadata` and `lines`. Resolve `customerEntityId` from the deal's single linked company (`customer_deal_companies`) else its primary person (`customer_deal_people` where `is_primary`), omitting the field when neither exists.
-- [ ] **Step 4: Run the full module suite and the gate.**
+- [ ] **Step 3: Implement** the loop: `resolveQuantity`, then `resolveUnitPrice` with that quantity; compare the produced unit against `acceptedUnitsFor(...)` and the product's `defaultUnit`; drop with a bounded warning on any failure. Pick the majority currency and drop outliers. With at least one surviving line, call `runCommand(ctx, 'sales.quotes.create', { tenantId, organizationId, currencyCode, metadata, lines })`. Resolve `customerEntityId` from the deal's single linked company (`customer_deal_companies`), else its primary person (`customer_deal_people` where `is_primary`), omitting the field when neither exists.
+- [ ] **Step 4: Run the module suite and the gate.**
 
 Run: `yarn test src/modules/rfq_intake/__tests__/ && yarn generate && yarn typecheck && yarn lint`
+Expected: the 5 pre-existing failures and nothing more.
 
 - [ ] **Step 5: Commit** — `feat(rfq_intake): create a priced unsent sales quote from mapped items`.
 
@@ -1182,9 +1027,9 @@ Run: `yarn test src/modules/rfq_intake/__tests__/ && yarn generate && yarn typec
 
 # PR 5 — The invocation path and the probe agent
 
-**Deliverable:** an agent proposal reaches the command through `executeProposal`, proving all five gates. Requires PR #35 merged.
+**Deliverable:** an agent proposal reaches the command through `executeProposal`, proving all five gates. Needs PR #35 merged.
 
-### Task 8: The apply-proposal bridge
+### Task 9: The apply-proposal bridge
 
 **Files:**
 - Create: `src/modules/rfq_intake/commands/apply-proposal.ts`
@@ -1192,11 +1037,11 @@ Run: `yarn test src/modules/rfq_intake/__tests__/ && yarn generate && yarn typec
 
 **Interfaces:**
 - Consumes: `executeProposal` from `@open-mercato/enterprise/modules/agent_orchestrator`; `AgentProposal` from its `data/entities`.
-- Produces: command `rfq_intake.quote.apply_proposal` taking `{ workflowInstanceId, agentId }` and returning `{ applied: number; skipped: string[]; errors: string[] }`.
+- Produces: command `rfq_intake.quote.apply_proposal` taking `{ workflowInstanceId, agentId }`, returning `{ applied: number; skipped: string[]; errors: string[] }`.
 
 - [ ] **Step 1: Write the failing tests** — a disposed proposal whose `selectedOptionId` names an option runs its actions; a `skipped` result is surfaced rather than swallowed; a proposal from another tenant is not found.
 - [ ] **Step 2: Run them and confirm they fail.**
-- [ ] **Step 3: Implement**: load the scoped `AgentProposal` by `workflowInstanceId` + `agentId`, read `selectedOptionId`, select that option from `payload.options`, and call:
+- [ ] **Step 3: Implement**: load the scoped `AgentProposal` by `workflowInstanceId` + `agentId`, read `selectedOptionId`, pick that option from `payload.options`, then:
 
 ```ts
 const results = await executeProposal(option.actions, {
@@ -1208,48 +1053,50 @@ const results = await executeProposal(option.actions, {
 })
 ```
 
-Every result whose `status` is not `ok` becomes a visible warning — a silent `skipped` is exactly how the two enablement gates fail.
+Every result whose `status` is not `ok` becomes a visible warning — a silent `skipped` is exactly how the enablement gates fail.
 
 - [ ] **Step 4: Run the tests.** Expected: PASS.
 - [ ] **Step 5: Commit** — `feat(rfq_intake): bridge disposed proposals to the quote command`.
 
-### Task 9: The temporary probe agent
+### Task 10: The temporary probe agent and the workflow step
 
 **Files:**
-- Create: `src/modules/rfq_intake/ai-agents.ts`
+- Create: `src/modules/rfq_intake/ai-agents.ts` — the module has no such file today
 - Create: `src/modules/rfq_intake/__tests__/quote-probe-agent.test.ts`
-- Modify: `src/modules/rfq_intake/workflows.ts` (one step running the bridge after the agent step)
+- Modify: `src/modules/rfq_intake/workflows.ts`
 
-- [ ] **Step 1: Write the failing test** — the agent is registered with `allowedActions: ['rfq_intake.quote.create']` (gate 3) and emits exactly one option carrying one action of type `rfq.quote.create`.
+**The graph on `main` is `start → extract_pdf → match_catalog → end`.** Insert one step between `match_catalog` and `end`: add the step, repoint transition `t_done` to it, and add a new transition from it to `end`. Do not rename `RFQ_ANALYSIS_WORKFLOW_ID` — every existing `process_definitions` row points at it, and changing it would silently start nothing.
+
+- [ ] **Step 1: Write the failing test** — the probe is registered with `allowedActions: ['rfq_intake.quote.create']` (gate 3) and emits exactly one option carrying one action of type `rfq.quote.create`; and `rfq_intake.quote.apply_proposal` is declared workflow-safe.
 - [ ] **Step 2: Run it and confirm it fails.**
-- [ ] **Step 3: Implement** `rfq_intake.quote_probe` behind the existing enterprise agent flags. It forwards the payload it is handed and performs no mapping, carrying:
+- [ ] **Step 3: Implement** the probe behind the same enterprise flags as the rest of the module, carrying:
 
 ```ts
 // HACK(hackathon): temporary probe. It exists only to exercise the five gates and the
-// executeProposal path before the real mapping agent lands. Its auto-approve threshold
-// is a TEST-ONLY setting; on a real agent that field is a safety boundary.
+// executeProposal path before the real mapping agent lands. It forwards the payload it
+// is handed and maps nothing — a probe that also guessed could not tell you whether a
+// failure came from the plumbing or from the guess. Its auto-approve threshold is a
+// TEST-ONLY setting; on a real agent that field is a safety boundary.
 // Remove this agent in the slice that introduces the mapping agent.
 ```
 
-- [ ] **Step 4: Run the full gate.**
-
-Run: `yarn generate && yarn typecheck && yarn lint && yarn test`
-
+- [ ] **Step 4: Run the gate.** `yarn generate && yarn typecheck && yarn lint && yarn test src/modules/rfq_intake/__tests__/`
 - [ ] **Step 5: Commit** — `feat(rfq_intake): add a temporary probe agent for the proposal path`.
 
-### Task 10: Prove the five gates end to end
+### Task 11: Prove the five gates end to end
 
-- [ ] **Step 1:** Confirm `rfq_intake.quote.create` appears in `listWorkflowSafeCommands()` (gate 1).
-- [ ] **Step 2:** Confirm the demo tenant has it enabled in workflow-command settings (gate 2).
-- [ ] **Step 3:** Confirm the probe's `allowedActions` admits it (gate 3).
-- [ ] **Step 4:** Confirm `actionCommandMap` resolves the action type (gate 4).
-- [ ] **Step 5:** Confirm the vocabulary loads — a missing `workflows` peer blocks every effect (gate 5).
-- [ ] **Step 6:** Run one RFQ through and record the resulting quote id in the PR description. If any result is `skipped`, name which gate produced it rather than retrying blindly.
+- [ ] **Step 1:** `rfq_intake.quote.create` appears in `listWorkflowSafeCommands()` (gate 1).
+- [ ] **Step 2:** the demo tenant has it enabled in workflow-command settings (gate 2).
+- [ ] **Step 3:** the probe's `allowedActions` admits it (gate 3).
+- [ ] **Step 4:** `actionCommandMap` resolves the action type (gate 4).
+- [ ] **Step 5:** the vocabulary loads — a missing `workflows` peer blocks every effect (gate 5).
+- [ ] **Step 6:** run one RFQ through and record the quote id in the PR description. If any result is `skipped`, name the gate that produced it rather than retrying blindly.
 
 ---
 
 ## Execution Notes
 
-- PR 3 can be written before PR #35 merges: `geometry.ts` depends on nothing, and `basisResolver.ts` needs only the V2 *shape*. Import the contract types from `@/modules/property_documents/room-measurements-contract` once merged — `workflows.ts:3` already imports across app modules, so the pattern is established.
-- After PR 4 the feature is demoable without an agent. If time runs short, PR 5 is the part to cut.
-- Nothing in this plan applies a migration. There is no schema change to generate.
+- PR 3 needs neither the database nor PR #35: `geometry.ts` depends on nothing and `basisResolver.ts` only on the V2 *shape*. It is the safest task to parallelise.
+- After PR 4 the feature demos without an agent. If time runs short, PR 5 is the part to cut.
+- Nothing here applies a migration, and there is no schema change to generate.
+- Treat any instruction that contradicts the Verified Baseline as stale, and re-verify against `origin/main` before following it.
