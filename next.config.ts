@@ -57,6 +57,7 @@ const nextConfig: NextConfig & { agentRules?: boolean } = {
   ],
   serverExternalPackages: [
     'esbuild',
+    '@napi-rs/canvas',
     '@esbuild/darwin-arm64',
     '@open-mercato/cli',
     'puppeteer-core',
