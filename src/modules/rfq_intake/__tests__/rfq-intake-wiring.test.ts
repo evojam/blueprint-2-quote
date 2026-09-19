@@ -27,7 +27,7 @@ describe('rfq_intake inbox action registry', () => {
 })
 
 describe('rfq_intake analysis workflow', () => {
-  it('chains the three agents and triggers on the module event', async () => {
+  it('chains the three agents and declares no trigger of its own', async () => {
     const { workflowsConfig } = await import('../workflows')
     const workflow = workflowsConfig.workflows.find((entry) => entry.workflowId === 'rfq_intake.analysis')
     expect(workflow).toBeDefined()
@@ -62,12 +62,11 @@ describe('rfq_intake analysis workflow', () => {
     expect(activities[4].config.commandId).toBe('rfq_intake.deal.advance')
     expect(activities[4].config.input).toMatchObject({ stage: 'review' })
 
-    const trigger = definition.triggers?.[0]
-    expect(trigger?.eventPattern).toBe('rfq_intake.rfq.created')
-    // Without `__files` in the mapping the agent gets no document to read.
-    expect(trigger?.config?.contextMapping?.map((entry) => entry.targetKey)).toEqual(
-      expect.arrayContaining(['dealId', '__files']),
-    )
+    // No trigger of its own, deliberately. The entry point is the orchestrator process
+    // definition (`lib/startProcess.ts`); an embedded event trigger would start a
+    // SECOND instance per RFQ, and that one would carry no acting user, so it could
+    // not execute a single step.
+    expect(definition.triggers ?? []).toEqual([])
   })
 
   it('survives the same validation registerCodeWorkflows applies', async () => {

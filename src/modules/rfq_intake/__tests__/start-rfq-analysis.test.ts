@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, jest } from '@jest/globals'
 
 const emitRfqIntakeEvent = jest.fn<(...args: any[]) => Promise<void>>()
+const startRfqAnalysisProcess = jest.fn<(...args: any[]) => Promise<any>>()
 const findOneWithDecryption = jest.fn<(...args: any[]) => Promise<any>>()
 
 jest.mock('../events', () => ({
@@ -8,6 +9,9 @@ jest.mock('../events', () => ({
 }))
 jest.mock('@open-mercato/shared/lib/encryption/find', () => ({
   findOneWithDecryption: (...args: any[]) => findOneWithDecryption(...args),
+}))
+jest.mock('../lib/startProcess', () => ({
+  startRfqAnalysisProcess: (...args: any[]) => startRfqAnalysisProcess(...args),
 }))
 
 import handler, { type ActionExecutedPayload } from '../subscribers/start-rfq-analysis'
@@ -37,6 +41,8 @@ function executedAction(overrides: Partial<ActionExecutedPayload> = {}): ActionE
 describe('start-rfq-analysis', () => {
   beforeEach(() => {
     emitRfqIntakeEvent.mockReset()
+    startRfqAnalysisProcess.mockReset()
+    startRfqAnalysisProcess.mockResolvedValue({ started: true })
     findOneWithDecryption.mockReset()
     // Proposal first, then the e-mail behind it.
     findOneWithDecryption
@@ -61,10 +67,35 @@ describe('start-rfq-analysis', () => {
     expect(payload).toMatchObject({ dealId: DEAL, tenantId: TENANT, organizationId: ORG })
   })
 
+  /**
+   * Starting through the process is what puts the run in the orchestrator's execution
+   * history AND what gives it an acting user — `parseTriggeredByUser` yields one only
+   * for a `manual` entry. Starting the workflow directly would do neither.
+   */
+  it('starts the orchestrator process as the acting user, with the document attached', async () => {
+    await handler(executedAction(), ctx)
+
+    expect(startRfqAnalysisProcess).toHaveBeenCalledTimes(1)
+    const [, , scope, userId, input] = startRfqAnalysisProcess.mock.calls[0] as any[]
+    expect(scope).toEqual({ tenantId: TENANT, organizationId: ORG })
+    expect(userId).toBe(USER)
+    expect(input).toMatchObject({ dealId: DEAL, proposalId: 'proposal-1', emailId: 'email-1' })
+    // Without `__files` the agent has no document to read.
+    expect(input.__files.attachments).toEqual([{ attachmentId: 'attachment-1' }])
+  })
+
+  it('reports a case whose process could not start instead of failing silently', async () => {
+    startRfqAnalysisProcess.mockResolvedValue({ started: false, reason: 'no RFQ process definition' })
+
+    await expect(handler(executedAction(), ctx)).resolves.toBeUndefined()
+    expect(startRfqAnalysisProcess).toHaveBeenCalledTimes(1)
+  })
+
   it('does not start a run it knows cannot write, when the actor is missing', async () => {
     await handler(executedAction({ executedByUserId: null }), ctx)
 
     expect(emitRfqIntakeEvent).not.toHaveBeenCalled()
+    expect(startRfqAnalysisProcess).not.toHaveBeenCalled()
   })
 
   it('does not start a run when the scope is incomplete', async () => {
@@ -82,6 +113,7 @@ describe('start-rfq-analysis', () => {
     await handler(executedAction(), ctx)
 
     expect(emitRfqIntakeEvent).not.toHaveBeenCalled()
+    expect(startRfqAnalysisProcess).not.toHaveBeenCalled()
   })
 
   it('ignores an executed action that is not an RFQ case', async () => {

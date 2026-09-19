@@ -36,11 +36,15 @@ export const RFQ_ANALYSIS_WORKFLOW_ID = 'rfq_intake.analysis'
  * RFQ analysis chain.
  *
  * Code-defined on purpose: `registerCodeWorkflows` in `src/bootstrap-common.ts` puts
- * it in the registry and `loadCodeTriggers` folds its embedded event trigger into the
- * same pool as database triggers, so the whole chain is reproducible from git with no
- * seed and no click. A database row carrying the same `workflowId` shadows this
- * definition, which is what lets the process grow in the Studio later without a
- * migration.
+ * it in the registry, so the graph is reproducible from git with no seed and no click.
+ * A database row carrying the same `workflowId` shadows this definition, which is what
+ * lets the process grow in the Studio later without a migration.
+ *
+ * It declares NO trigger of its own. The entry point is the Agent Orchestrator process
+ * definition bound to this workflow, started from `lib/startProcess.ts` when an RFQ
+ * action is accepted. An embedded event trigger here would start a second, parallel
+ * instance for the same RFQ, and that instance would carry no acting user — see
+ * `lib/startProcess.ts` for why that cannot execute a single step.
  *
  * The graph is deliberately short. The per-plan and per-requirement iteration lives in
  * the two commands below rather than in the graph, because the engine has no dynamic
@@ -185,25 +189,6 @@ const rfqAnalysis = defineWorkflow({
     { transitionId: 't_match', transitionName: 'Match', fromStepId: 'measure_plans', toStepId: 'match_catalog', trigger: 'auto' },
     { transitionId: 't_review', transitionName: 'Review', fromStepId: 'match_catalog', toStepId: 'mark_review', trigger: 'auto' },
     { transitionId: 't_done', transitionName: 'Done', fromStepId: 'mark_review', toStepId: 'end', trigger: 'auto' },
-  ],
-  triggers: [
-    {
-      triggerId: 'rfq_created_trigger',
-      name: 'RFQ created',
-      description: 'Starts when an accepted inbox action opens an RFQ case with attachments.',
-      eventPattern: 'rfq_intake.rfq.created',
-      config: {
-        contextMapping: [
-          { targetKey: 'dealId', sourceExpression: 'dealId' },
-          { targetKey: 'proposalId', sourceExpression: 'proposalId' },
-          { targetKey: 'emailId', sourceExpression: 'emailId' },
-          { targetKey: '__files', sourceExpression: '__files' },
-        ],
-        maxConcurrentInstances: 20,
-      },
-      enabled: true,
-      priority: 0,
-    },
   ],
 })
 
