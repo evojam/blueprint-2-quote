@@ -283,7 +283,7 @@ Per-item failures drop the item with a bounded warning and let the rest proceed.
 | Basis unit ≠ product `defaultUnit` | Item dropped with warning |
 | No price row for the variant in the resolved currency | Item dropped with warning |
 | Resolved price row points at a different variant | Item dropped; never substituted |
-| Lines resolve to mixed currencies | Outliers dropped; majority currency used |
+| A line prices in a currency other than PLN | Item dropped with `currency_unsupported` |
 | Zero items survive | `quoteId: null`, no quote created |
 | Deal has no linked customer | Quote created without `customerEntityId` (optional in Sales) |
 | Command invoked twice | Two quotes — see Data Model; accepted shortcut |

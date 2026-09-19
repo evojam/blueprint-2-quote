@@ -46,6 +46,10 @@ function makeCtx(overrides: { deal?: unknown; run?: unknown } = {}) {
                 if (entity.name === 'AgentRun') {
                   return 'run' in overrides ? overrides.run : acceptedRun()
                 }
+                // This file exercises the contract and the guards, not line assembly:
+                // an empty catalog makes every item drop cleanly so those assertions
+                // stay about the guard under test. Line assembly has its own suite.
+                if (entity.name.startsWith('Catalog') || entity.name.startsWith('CustomerDeal')) return null
                 throw new Error(`unexpected findOne on ${entity.name}`)
               },
             }),
@@ -123,10 +127,12 @@ describe('rfq_intake.quote.create scope and deal guards', () => {
     await expect(createQuoteCommand.execute(validInput, makeCtx({ deal: null }))).rejects.toThrow(/Deal/)
   })
 
-  it('returns an explicit not-implemented result rather than pretending success', async () => {
+  it('creates nothing and names the refusal when an item resolves to no product', async () => {
     const result = await createQuoteCommand.execute(validInput, makeCtx())
 
-    expect(result).toEqual({ quoteId: null, lineCount: 0, warnings: ['quote_creation_not_implemented'] })
+    // An empty catalog means the single item is dropped; a quote with no lines is
+    // never created, and the warning carries the index the caller wrote.
+    expect(result).toEqual({ quoteId: null, lineCount: 0, warnings: ['product_not_found:0'] })
   })
 })
 
@@ -167,8 +173,11 @@ describe('rfq_intake.quote.create room-measurements run guard', () => {
     await expect(createQuoteCommand.execute(validInput, makeCtx({ run }))).rejects.toThrow(/run/i)
   })
 
-  it('accepts a valid empty result and creates nothing from it', async () => {
+  it('accepts a valid result and proceeds to the items rather than aborting', async () => {
+    // The guard's job ends once the run is usable. Item resolution then runs and, with
+    // an empty catalog, drops the single item instead of throwing.
     const result = await createQuoteCommand.execute(validInput, makeCtx())
-    expect(result.quoteId).toBeNull()
+
+    expect(result).toEqual({ quoteId: null, lineCount: 0, warnings: ['product_not_found:0'] })
   })
 })
