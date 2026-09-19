@@ -343,7 +343,7 @@ Use the repository's managed long-running process mechanism to run `yarn dev`. W
 
 - [ ] **Step 2: Run the sample in the existing Agent Orchestrator Playground**
 
-Open `/backend/agent_orchestrator/playground`, select `property_documents.catalog_matcher`, insert the sample, and run:
+Open `/backend/playground`, select `property_documents.catalog_matcher`, insert the sample, and run:
 
 ```json
 {
