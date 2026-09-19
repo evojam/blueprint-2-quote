@@ -28,7 +28,7 @@ export const injectionTable: ModuleInjectionTable = {
       // already in `i18n/*.json` under `deal_links.tab.label`; once upstream adds
       // `t()` here, swap the literal back for that key and drop the test that guards
       // this line. The widget body is unaffected — it translates through `useT`.
-      groupLabel: 'Wycena',
+      groupLabel: 'Oferty i zamówienia',
       priority: -10,
     },
   ],
