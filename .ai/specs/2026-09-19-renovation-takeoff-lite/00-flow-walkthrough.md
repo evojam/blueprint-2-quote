@@ -2,9 +2,9 @@
 
 **Spec**: Przedmiar remontowy → wycena (wariant uproszczony)
 **Date**: 2026-09-19
-**Kontekst**: pierwszy dokument z opracowania wariantu uproszczonego; pozostałe części (zakres, model danych, kontrakty, fazy) trafią osobnym PR-em.
+**Indeks**: [README.md](./README.md)
 
-> Dokument poglądowy do omówienia na spotkaniu. Pokazuje, **co się dzieje po kolei** i **czym moduły się ze sobą komunikują**. Kontrakty tras i komend oraz model danych są w dalszych częściach opracowania, poza tym PR-em.
+> Dokument poglądowy do omówienia na spotkaniu. Pokazuje, **co się dzieje po kolei** i **czym moduły się ze sobą komunikują**. Szczegóły kontraktów są w [03](./03-api-events-ui.md), model danych w [02](./02-architecture-and-data.md).
 >
 > Opisuje wariant uproszczony. W wariancie pełnym między krokiem 8 a 11 dochodzą jeszcze receptury i osobny kosztorys.
 
@@ -128,7 +128,7 @@ Trzy reguły mappera:
 
 1. **Sum nie przekazujemy.** `totalNetAmount`, `grandTotalNetAmount` i reszta są opcjonalne — liczy je `salesCalculationService`. Podanie własnych daje dwa źródła prawdy.
 2. **`kind` nie zna materiału.** Enum to `product | service | shipping | discount | adjustment`. Materiał i sprzęt mapują się na `product`.
-3. **Pozycja bez ceny wymaga jawnej decyzji.** Zero i ostrzeżenie (wybór do zapisania w słowniku domenowym) albo odrzucenie przed wywołaniem `sales`. Milczące przepuszczenie = oferta za darmo.
+3. **Pozycja bez ceny wymaga jawnej decyzji.** Zero i ostrzeżenie (wybór ze słownika w [02](./02-architecture-and-data.md#domain-vocabulary-and-business-rules)) albo odrzucenie przed wywołaniem `sales`. Milczące przepuszczenie = oferta za darmo.
 
 ---
 
