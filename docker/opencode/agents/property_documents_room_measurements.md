@@ -70,12 +70,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
       ],
       "properties": {
         "imageWidthPx": {
-          "type": "integer",
-          "exclusiveMinimum": 0
+          "type": "integer"
         },
         "imageHeightPx": {
-          "type": "integer",
-          "exclusiveMinimum": 0
+          "type": "integer"
         },
         "declaredUnit": {
           "type": "object",
@@ -99,8 +97,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
               ]
             },
             "sourceText": {
-              "type": "string",
-              "maxLength": 500
+              "type": "string"
             },
             "evidence": {
               "type": "array",
@@ -126,12 +123,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                   },
                   "width": {
                     "type": "number",
-                    "exclusiveMinimum": 0,
                     "maximum": 1
                   },
                   "height": {
                     "type": "number",
-                    "exclusiveMinimum": 0,
                     "maximum": 1
                   }
                 }
@@ -155,8 +150,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
           ],
           "properties": {
             "sourceText": {
-              "type": "string",
-              "maxLength": 500
+              "type": "string"
             },
             "evidence": {
               "type": "array",
@@ -182,12 +176,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                   },
                   "width": {
                     "type": "number",
-                    "exclusiveMinimum": 0,
                     "maximum": 1
                   },
                   "height": {
                     "type": "number",
-                    "exclusiveMinimum": 0,
                     "maximum": 1
                   }
                 }
@@ -202,7 +194,6 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
         },
         "calibrations": {
           "type": "array",
-          "maxItems": 20,
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -220,8 +211,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
             "properties": {
               "id": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 128
+                "minLength": 1
               },
               "kind": {
                 "type": "string",
@@ -231,8 +221,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                 ]
               },
               "sourceText": {
-                "type": "string",
-                "maxLength": 500
+                "type": "string"
               },
               "evidence": {
                 "type": "array",
@@ -258,12 +247,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                     },
                     "width": {
                       "type": "number",
-                      "exclusiveMinimum": 0,
                       "maximum": 1
                     },
                     "height": {
                       "type": "number",
-                      "exclusiveMinimum": 0,
                       "maximum": 1
                     }
                   }
@@ -327,12 +314,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                 "properties": {
                   "id": {
                     "type": "string",
-                    "minLength": 1,
-                    "maxLength": 128
+                    "minLength": 1
                   },
                   "value": {
-                    "type": "number",
-                    "exclusiveMinimum": 0
+                    "type": "number"
                   },
                   "unit": {
                     "type": "string",
@@ -360,8 +345,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                   },
                   "sourceText": {
                     "type": "string",
-                    "nullable": true,
-                    "maxLength": 500
+                    "nullable": true
                   },
                   "evidence": {
                     "type": "array",
@@ -387,12 +371,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                         },
                         "width": {
                           "type": "number",
-                          "exclusiveMinimum": 0,
                           "maximum": 1
                         },
                         "height": {
                           "type": "number",
-                          "exclusiveMinimum": 0,
                           "maximum": 1
                         }
                       }
@@ -401,8 +383,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                   "calibrationId": {
                     "type": "string",
                     "nullable": true,
-                    "minLength": 1,
-                    "maxLength": 128
+                    "minLength": 1
                   },
                   "confidence": {
                     "type": "number",
@@ -452,12 +433,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
           "properties": {
             "id": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 128
+              "minLength": 1
             },
             "value": {
-              "type": "number",
-              "exclusiveMinimum": 0
+              "type": "number"
             },
             "unit": {
               "type": "string",
@@ -485,8 +464,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
             },
             "sourceText": {
               "type": "string",
-              "nullable": true,
-              "maxLength": 500
+              "nullable": true
             },
             "evidence": {
               "type": "array",
@@ -512,12 +490,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                   },
                   "width": {
                     "type": "number",
-                    "exclusiveMinimum": 0,
                     "maximum": 1
                   },
                   "height": {
                     "type": "number",
-                    "exclusiveMinimum": 0,
                     "maximum": 1
                   }
                 }
@@ -526,8 +502,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
             "calibrationId": {
               "type": "string",
               "nullable": true,
-              "minLength": 1,
-              "maxLength": 128
+              "minLength": 1
             },
             "confidence": {
               "type": "number",
@@ -550,18 +525,15 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
         },
         "warnings": {
           "type": "array",
-          "maxItems": 100,
           "items": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 500
+            "minLength": 1
           }
         }
       }
     },
     "rooms": {
       "type": "array",
-      "maxItems": 100,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -580,19 +552,16 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
         "properties": {
           "id": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 128
+            "minLength": 1
           },
           "printedName": {
             "type": "string",
             "nullable": true,
-            "minLength": 1,
-            "maxLength": 500
+            "minLength": 1
           },
           "location": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 500
+            "minLength": 1
           },
           "floor": {
             "type": "object",
@@ -606,7 +575,6 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
             "properties": {
               "outerBoundary": {
                 "type": "array",
-                "maxItems": 128,
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
@@ -630,7 +598,6 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
               },
               "holes": {
                 "type": "array",
-                "maxItems": 32,
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
@@ -641,12 +608,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                   "properties": {
                     "id": {
                       "type": "string",
-                      "minLength": 1,
-                      "maxLength": 128
+                      "minLength": 1
                     },
                     "boundary": {
                       "type": "array",
-                      "maxItems": 128,
                       "items": {
                         "type": "object",
                         "additionalProperties": false,
@@ -690,12 +655,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                 "properties": {
                   "id": {
                     "type": "string",
-                    "minLength": 1,
-                    "maxLength": 128
+                    "minLength": 1
                   },
                   "value": {
-                    "type": "number",
-                    "exclusiveMinimum": 0
+                    "type": "number"
                   },
                   "unit": {
                     "type": "string",
@@ -726,8 +689,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                     ]
                   },
                   "sourceText": {
-                    "type": "string",
-                    "maxLength": 500
+                    "type": "string"
                   },
                   "evidence": {
                     "type": "array",
@@ -753,12 +715,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                         },
                         "width": {
                           "type": "number",
-                          "exclusiveMinimum": 0,
                           "maximum": 1
                         },
                         "height": {
                           "type": "number",
-                          "exclusiveMinimum": 0,
                           "maximum": 1
                         }
                       }
@@ -789,7 +749,6 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
           },
           "walls": {
             "type": "array",
-            "maxItems": 128,
             "items": {
               "type": "object",
               "additionalProperties": false,
@@ -807,8 +766,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
               "properties": {
                 "id": {
                   "type": "string",
-                  "minLength": 1,
-                  "maxLength": 128
+                  "minLength": 1
                 },
                 "start": {
                   "type": "object",
@@ -869,12 +827,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                   "properties": {
                     "id": {
                       "type": "string",
-                      "minLength": 1,
-                      "maxLength": 128
+                      "minLength": 1
                     },
                     "value": {
-                      "type": "number",
-                      "exclusiveMinimum": 0
+                      "type": "number"
                     },
                     "unit": {
                       "type": "string",
@@ -902,8 +858,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                     },
                     "sourceText": {
                       "type": "string",
-                      "nullable": true,
-                      "maxLength": 500
+                      "nullable": true
                     },
                     "evidence": {
                       "type": "array",
@@ -929,12 +884,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                           },
                           "width": {
                             "type": "number",
-                            "exclusiveMinimum": 0,
                             "maximum": 1
                           },
                           "height": {
                             "type": "number",
-                            "exclusiveMinimum": 0,
                             "maximum": 1
                           }
                         }
@@ -943,8 +896,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                     "calibrationId": {
                       "type": "string",
                       "nullable": true,
-                      "minLength": 1,
-                      "maxLength": 128
+                      "minLength": 1
                     },
                     "confidence": {
                       "type": "number",
@@ -987,12 +939,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                   "properties": {
                     "id": {
                       "type": "string",
-                      "minLength": 1,
-                      "maxLength": 128
+                      "minLength": 1
                     },
                     "value": {
-                      "type": "number",
-                      "exclusiveMinimum": 0
+                      "type": "number"
                     },
                     "unit": {
                       "type": "string",
@@ -1020,8 +970,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                     },
                     "sourceText": {
                       "type": "string",
-                      "nullable": true,
-                      "maxLength": 500
+                      "nullable": true
                     },
                     "evidence": {
                       "type": "array",
@@ -1047,12 +996,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                           },
                           "width": {
                             "type": "number",
-                            "exclusiveMinimum": 0,
                             "maximum": 1
                           },
                           "height": {
                             "type": "number",
-                            "exclusiveMinimum": 0,
                             "maximum": 1
                           }
                         }
@@ -1061,8 +1008,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                     "calibrationId": {
                       "type": "string",
                       "nullable": true,
-                      "minLength": 1,
-                      "maxLength": 128
+                      "minLength": 1
                     },
                     "confidence": {
                       "type": "number",
@@ -1097,12 +1043,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                   "properties": {
                     "id": {
                       "type": "string",
-                      "minLength": 1,
-                      "maxLength": 128
+                      "minLength": 1
                     },
                     "value": {
-                      "type": "number",
-                      "exclusiveMinimum": 0
+                      "type": "number"
                     },
                     "unit": {
                       "type": "string",
@@ -1130,8 +1074,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                     },
                     "sourceText": {
                       "type": "string",
-                      "nullable": true,
-                      "maxLength": 500
+                      "nullable": true
                     },
                     "evidence": {
                       "type": "array",
@@ -1157,12 +1100,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                           },
                           "width": {
                             "type": "number",
-                            "exclusiveMinimum": 0,
                             "maximum": 1
                           },
                           "height": {
                             "type": "number",
-                            "exclusiveMinimum": 0,
                             "maximum": 1
                           }
                         }
@@ -1171,8 +1112,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                     "calibrationId": {
                       "type": "string",
                       "nullable": true,
-                      "minLength": 1,
-                      "maxLength": 128
+                      "minLength": 1
                     },
                     "confidence": {
                       "type": "number",
@@ -1203,7 +1143,6 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
           },
           "openings": {
             "type": "array",
-            "maxItems": 64,
             "items": {
               "type": "object",
               "additionalProperties": false,
@@ -1221,8 +1160,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
               "properties": {
                 "id": {
                   "type": "string",
-                  "minLength": 1,
-                  "maxLength": 128
+                  "minLength": 1
                 },
                 "kind": {
                   "type": "string",
@@ -1236,8 +1174,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                 "wallId": {
                   "type": "string",
                   "nullable": true,
-                  "minLength": 1,
-                  "maxLength": 128
+                  "minLength": 1
                 },
                 "start": {
                   "type": "object",
@@ -1300,12 +1237,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                   "properties": {
                     "id": {
                       "type": "string",
-                      "minLength": 1,
-                      "maxLength": 128
+                      "minLength": 1
                     },
                     "value": {
-                      "type": "number",
-                      "exclusiveMinimum": 0
+                      "type": "number"
                     },
                     "unit": {
                       "type": "string",
@@ -1333,8 +1268,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                     },
                     "sourceText": {
                       "type": "string",
-                      "nullable": true,
-                      "maxLength": 500
+                      "nullable": true
                     },
                     "evidence": {
                       "type": "array",
@@ -1360,12 +1294,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                           },
                           "width": {
                             "type": "number",
-                            "exclusiveMinimum": 0,
                             "maximum": 1
                           },
                           "height": {
                             "type": "number",
-                            "exclusiveMinimum": 0,
                             "maximum": 1
                           }
                         }
@@ -1374,8 +1306,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                     "calibrationId": {
                       "type": "string",
                       "nullable": true,
-                      "minLength": 1,
-                      "maxLength": 128
+                      "minLength": 1
                     },
                     "confidence": {
                       "type": "number",
@@ -1410,12 +1341,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                   "properties": {
                     "id": {
                       "type": "string",
-                      "minLength": 1,
-                      "maxLength": 128
+                      "minLength": 1
                     },
                     "value": {
-                      "type": "number",
-                      "exclusiveMinimum": 0
+                      "type": "number"
                     },
                     "unit": {
                       "type": "string",
@@ -1443,8 +1372,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                     },
                     "sourceText": {
                       "type": "string",
-                      "nullable": true,
-                      "maxLength": 500
+                      "nullable": true
                     },
                     "evidence": {
                       "type": "array",
@@ -1470,12 +1398,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                           },
                           "width": {
                             "type": "number",
-                            "exclusiveMinimum": 0,
                             "maximum": 1
                           },
                           "height": {
                             "type": "number",
-                            "exclusiveMinimum": 0,
                             "maximum": 1
                           }
                         }
@@ -1484,8 +1410,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                     "calibrationId": {
                       "type": "string",
                       "nullable": true,
-                      "minLength": 1,
-                      "maxLength": 128
+                      "minLength": 1
                     },
                     "confidence": {
                       "type": "number",
@@ -1520,12 +1445,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                   "properties": {
                     "id": {
                       "type": "string",
-                      "minLength": 1,
-                      "maxLength": 128
+                      "minLength": 1
                     },
                     "value": {
-                      "type": "number",
-                      "exclusiveMinimum": 0
+                      "type": "number"
                     },
                     "unit": {
                       "type": "string",
@@ -1553,8 +1476,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                     },
                     "sourceText": {
                       "type": "string",
-                      "nullable": true,
-                      "maxLength": 500
+                      "nullable": true
                     },
                     "evidence": {
                       "type": "array",
@@ -1580,12 +1502,10 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                           },
                           "width": {
                             "type": "number",
-                            "exclusiveMinimum": 0,
                             "maximum": 1
                           },
                           "height": {
                             "type": "number",
-                            "exclusiveMinimum": 0,
                             "maximum": 1
                           }
                         }
@@ -1594,8 +1514,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                     "calibrationId": {
                       "type": "string",
                       "nullable": true,
-                      "minLength": 1,
-                      "maxLength": 128
+                      "minLength": 1
                     },
                     "confidence": {
                       "type": "number",
@@ -1628,11 +1547,9 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
           },
           "warnings": {
             "type": "array",
-            "maxItems": 100,
             "items": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 500
+              "minLength": 1
             }
           },
           "readiness": {
@@ -1693,8 +1610,7 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
                 "targetId": {
                   "type": "string",
                   "nullable": true,
-                  "minLength": 1,
-                  "maxLength": 128
+                  "minLength": 1
                 }
               }
             }
@@ -1704,11 +1620,9 @@ Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ 
     },
     "warnings": {
       "type": "array",
-      "maxItems": 100,
       "items": {
         "type": "string",
-        "minLength": 1,
-        "maxLength": 500
+        "minLength": 1
       }
     }
   }

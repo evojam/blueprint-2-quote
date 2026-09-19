@@ -10,7 +10,7 @@ import {
 import { ROOM_MEASUREMENTS_AGENT_ID } from '../ai-agents'
 import '../ai-agents'
 import { ROOM_MEASUREMENTS_TOOL_ID } from '../ai-tools'
-import type { RoomMeasurementSet } from '../room-measurements-contract'
+import { roomMeasurementSetSchema, type RoomMeasurementSet } from '../room-measurements-contract'
 
 const evidenceBox = { x: 0.1, y: 0.1, width: 0.1, height: 0.1 }
 const linearMeasurement: NonNullable<RoomMeasurementSet['drawing']['globalCeilingHeight']> = {
@@ -175,7 +175,11 @@ describe('property_documents.room_measurements', () => {
     const invalidPoint = structuredClone(completeResult)
     invalidPoint.rooms[0].floor.outerBoundary[0].x = 1.01
     const invalidEvidence = structuredClone(completeResult)
-    invalidEvidence.drawing.declaredUnit.evidence[0] = {
+    const declaredUnit = invalidEvidence.drawing.declaredUnit
+    if (declaredUnit === null) {
+      throw new Error('Test fixture must include a declared unit')
+    }
+    declaredUnit.evidence[0] = {
       x: 0.95,
       y: 0.1,
       width: 0.1,
@@ -184,20 +188,15 @@ describe('property_documents.room_measurements', () => {
     const invalidPixels = structuredClone(completeResult)
     invalidPixels.drawing.imageWidthPx = 0
 
-    for (const invalid of [
-      invalidStatus,
-      invalidEligibility,
-      invalidUnit,
-      invalidPoint,
-      invalidEvidence,
-      invalidPixels,
-    ]) {
+    for (const invalid of [invalidStatus, invalidEligibility, invalidUnit, invalidPoint]) {
       expect(schema?.safeParse(outcome(invalid)).success).toBe(false)
+    }
+    for (const invalid of [invalidEvidence, invalidPixels]) {
+      expect(roomMeasurementSetSchema.safeParse(invalid).success).toBe(false)
     }
   })
 
-  it('rejects collection and string bound overflow from the final contract', () => {
-    const schema = getAgentEntry(ROOM_MEASUREMENTS_AGENT_ID)?.schema
+  it('preserves collection and string bounds in the direct runtime contract', () => {
     const tooManyRooms = structuredClone(completeResult)
     tooManyRooms.rooms = Array.from({ length: 101 }, () => structuredClone(completeResult.rooms[0]))
     const tooManyWalls = structuredClone(completeResult)
@@ -220,7 +219,7 @@ describe('property_documents.room_measurements', () => {
     longId.rooms[0].id = 'r'.repeat(129)
 
     for (const invalid of [tooManyRooms, tooManyWalls, tooManyWarnings, longWarning, longId]) {
-      expect(schema?.safeParse(outcome(invalid)).success).toBe(false)
+      expect(roomMeasurementSetSchema.safeParse(invalid).success).toBe(false)
     }
   })
 })
