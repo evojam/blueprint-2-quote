@@ -91,7 +91,14 @@ package-lock.json
 .idea/
 .vscode/settings.json
 .vscode/launch.json
-.claude/
+# Everything under .claude/ is local (worktrees, settings.local.json) EXCEPT the
+# project-wide agent config we share: the hook and skill that keep the RFQ process
+# definition in step with the repo. A bare `.claude/` would make a negation below
+# unreachable — git never descends into an excluded directory.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/skills/
 .codex/
 
 # agentic / MCP local secrets
