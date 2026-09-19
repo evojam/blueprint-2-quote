@@ -36,7 +36,27 @@ registerEventModuleConfigs(eventModuleConfigs)
 registerMessageTypes(messageTypes, { replace: true })
 registerMessageObjectTypes(messageObjectTypes, { replace: true })
 registerNotificationTypes(notificationTypes, { replace: true })
-registerCodeWorkflows(allCodeWorkflows)
+/**
+ * Code workflows shipped by installed modules that this app does not run.
+ *
+ * `modules.ts` overrides have no `workflows` domain, so filtering the registration
+ * here is the only app-owned seam — and unlike disabling each one in the UI, it is
+ * in git and applies to every environment.
+ *
+ * The first two are demos (`Testing`, `E-commerce`). `sales.order-approval` is a
+ * deliberate product removal, not cleanup: it carries a live trigger on
+ * `sales.order.created` and an injected widget on the order page. This app quotes
+ * renovation work; it does not run an order approval chain.
+ */
+const DISABLED_CODE_WORKFLOW_IDS = new Set([
+  'workflows.simple-approval',
+  'workflows.checkout-demo',
+  'sales.order-approval',
+])
+
+registerCodeWorkflows(
+  allCodeWorkflows.filter((workflow) => !DISABLED_CODE_WORKFLOW_IDS.has(workflow.workflowId)),
+)
 runBootstrapRegistrations()
 
 type ServerFoundationBootstrapData = Omit<
