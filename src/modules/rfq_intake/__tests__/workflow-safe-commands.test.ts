@@ -28,7 +28,7 @@ describe('rfq_intake workflow-safe command declarations', () => {
   it('leaves every rfq_intake entry opt-in, so a tenant enables them deliberately', () => {
     const rfqEntries = listWorkflowSafeCommands().filter((e) => e.commandId.startsWith('rfq_intake.'))
 
-    expect(rfqEntries).toHaveLength(2)
+    expect(rfqEntries).toHaveLength(3)
     // Upstream discourages grandfathering new commands: `defaultEnabled` is reserved
     // for commands that predate the tenant setting. Nothing here runs until a tenant
     // switches it on once — that is gate 2, and it fails as a silent skip.
