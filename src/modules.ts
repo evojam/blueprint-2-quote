@@ -36,6 +36,7 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'communication_channels', from: '@open-mercato/core' },
   { id: 'ai_assistant', from: '@open-mercato/ai-assistant' },
   { id: 'inbox_ops', from: '@open-mercato/core' },
+  { id: 'catalog_seed', from: '@app' },
 ]
 
 const enterpriseModulesEnabled = parseBooleanWithDefault(process.env.OM_ENABLE_ENTERPRISE_MODULES, false)
