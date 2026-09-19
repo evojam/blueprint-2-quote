@@ -58,6 +58,9 @@ describe('rfq_intake analysis workflow', () => {
     ])
     expect(activities[0]!.config).toMatchObject({
       agentId: 'property_documents.pdf_intake',
+      input: {
+        __files: '{{context.__files}}',
+      },
     })
     expect(activities[1]!.config).toEqual({
       commandId: 'rfq_intake.requirements.match',

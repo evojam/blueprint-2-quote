@@ -118,7 +118,7 @@ services:
       - mercato-network
 
   localstack:
-    image: localstack/localstack:latest
+    image: ${LOCALSTACK_IMAGE:-localstack/localstack:4.14.0}
     restart: unless-stopped
     profiles:
       - storage-s3
