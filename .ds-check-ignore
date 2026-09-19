@@ -1218,6 +1218,12 @@
       "rule": "arbitrary-tailwind",
       "match": "sm:w-[260px]",
       "reason": "Literal class copied from the installed DealLinkedEntitiesTab (@open-mercato/core/src/modules/customers/components/detail/DealLinkedEntitiesTab.tsx) so the tab matches People/Companies pixel-for-pixel, per Task 7 brief."
+    },
+    {
+      "file": "src/modules/deal_links/widgets/injection/document-deals/widget.client.tsx",
+      "rule": "arbitrary-tailwind",
+      "match": "sm:w-[260px]",
+      "reason": "Literal class copied from the installed DealLinkedEntitiesTab (@open-mercato/core/src/modules/customers/components/detail/DealLinkedEntitiesTab.tsx) so the document-side Deals tab matches People/Companies pixel-for-pixel, mirroring the deal-side tab's own ignore entry, per Task 3 brief."
     }
   ]
 }
