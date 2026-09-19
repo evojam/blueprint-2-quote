@@ -65,10 +65,6 @@ Your result MUST match this JSON Schema (the \`data\` object). Pass it as the \`
       generatedProfile('open-mercato_property_documents_process_pdf', intakeOutcome),
     ),
     writeFile(
-      path.join(agentsDir, 'property_documents_pdf_text_reader.md'),
-      generatedProfile('open-mercato_property_documents_process_pdf'),
-    ),
-    writeFile(
       path.join(agentsDir, 'property_documents_room_dimensions.md'),
       generatedProfile('open-mercato_property_documents_extract_room_dimensions', arrayOutcome),
     ),
