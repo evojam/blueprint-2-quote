@@ -16,16 +16,17 @@ import '../di'
 import { ensureAgentsLoaded, getAgentEntry } from '@open-mercato/enterprise/modules/agent_orchestrator/lib/sdk/defineAgent'
 
 describe('property document file-agent bootstrap', () => {
-  it('loads file-plane options into the runtime registry', async () => {
+  it('loads supported file agents and excludes the retired text reader', async () => {
     await ensureAgentsLoaded()
-    expect(getAgentEntry('property_documents.pdf_text_reader')?.files).toEqual({
+    expect(getAgentEntry('property_documents.pdf_intake')?.files).toEqual({
       enabled: true,
       inputs: true,
-      outputs: false,
+      outputs: true,
       bash: false,
     })
-    expect(getAgentEntry('property_documents.pdf_text_reader')?.sourceFiles).toEqual(
+    expect(getAgentEntry('property_documents.pdf_intake')?.sourceFiles).toEqual(
       expect.arrayContaining([expect.objectContaining({ path: 'AGENT.md' })]),
     )
+    expect(getAgentEntry('property_documents.pdf_text_reader')).toBeUndefined()
   })
 })

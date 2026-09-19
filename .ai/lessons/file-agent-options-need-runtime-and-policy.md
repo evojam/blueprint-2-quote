@@ -2,7 +2,7 @@
 title: "Carry file-agent options through runtime and policy generation"
 modules: ["agent_orchestrator", "property_documents"]
 areas: ["ai-workflow", "framework-context"]
-topics: ["file-agents", "version-skew", "litellm", "tool-calls", "retrieval", "hmr"]
+topics: ["file-agents", "artifacts", "attachments", "workflows", "litellm", "tool-calls"]
 ---
 
 # Carry file-agent options through runtime and policy generation
@@ -22,5 +22,11 @@ topics: ["file-agents", "version-skew", "litellm", "tool-calls", "retrieval", "h
 **Candidate-retrieval addendum**: Do not require a catalog matcher to send an entire source sentence verbatim to token search. Measurements, locations, and inflected action forms can push the exact-token threshold past a valid catalog title even when the full text is strong ranking evidence. Probe the same trusted scope with the raw sentence and a normalized catalog term to identify this failure. Keep one bounded search over 1–4 normalized product/service terms, rank against the complete original text, and keep the returned IDs as the hard grounding boundary; do not hide low recall by listing an unfiltered catalog page.
 
 **Image-vision addendum**: A successful OpenCode `read` call for a PNG proves path access, not that the selected model received image pixels. Prove image capability with a real run. When it does not, use a bounded server-owned vision tool that derives the active workspace from trusted session context, validates one image by byte signature/size, and sends a data URL under a strict schema. The generated DI ESM bundle can remain stale even when its transitive app service changes; invalidate both the bundle and its cache when either `di.ts` or that service is newer. In local development the standalone sidecar can also inherit empty/default AI variables instead of the repo `.env`; load an existing local env file only as a documented hackathon fallback, while production still fails closed without process credentials.
+
+**Workflow artifact-handoff addendum**: A captured file-agent output is an `AgentRunArtifact`, while a downstream file agent's reserved `__files.attachments` input accepts Attachment IDs. A workflow result descriptor is therefore not a file handoff. Capture the persisted run ID, list artifacts in trusted tenant/organization scope, accept only tool-authored manifest members with strict filename/MIME/byte validation, and materialize a scoped temporary Attachment through one idempotent app-owned adapter before invoking the next file agent. Checkpoint run/artifact/Attachment IDs so retry reloads completed stages. Do not call the installed proposal-only artifact-promotion command unless an approved Agent Proposal actually exists.
+
+**Durable stage-retry addendum**: An `AgentRunSession` row is correlation state, not a heartbeat; a crashed runner can leave `pending` forever. Give every logical stage attempt a server-owned hard deadline. Before replacing a timed-out attempt, lock and re-read the scoped operation, run, and linked session rows in one transaction; terminal success wins, otherwise expire orphanable session rows and advance the logical attempt exactly once. Never perform an unconditional fail command after an unlocked `running` read. A late result stays trace data and must not replace the one attempt accepted in the business checkpoint.
+
+**File-agent retirement addendum**: Removing an agent requires more than deleting its authored folder. Remove its generated-profile hardener entry, app-owned descriptor/file-plane registration, exported ID, and every server-tool authorization branch that admits that ID; then regenerate rather than editing generated descriptors or OpenCode profiles. Preserve shared hardening tests under a capability-oriented name, and verify the retired ID is absent from the runtime registry while supported agents retain their scope and permissions.
 
 **Applies to**: Agent Orchestrator file agents, `.mercato/generated/file-agents.generated.ts`, `docker/opencode/agents/*.md`, and app-owned generation scripts.

@@ -6,7 +6,6 @@ const currentFile = fileURLToPath(import.meta.url)
 
 const PROPERTY_DOCUMENT_AGENT_FILES = [
   { fileName: 'property_documents_pdf_intake.md', readableSubdir: 'analysis' },
-  { fileName: 'property_documents_pdf_text_reader.md', readableSubdir: 'analysis' },
   { fileName: 'property_documents_room_dimensions.md', readableSubdir: 'in' },
 ]
 const ROOM_DIMENSIONS_AGENT_FILE = 'property_documents_room_dimensions.md'

@@ -12,7 +12,6 @@ jest.mock('@open-mercato/ai-assistant/modules/ai_assistant/lib/agent-registry', 
 import { ROOM_DIMENSIONS_AGENT_ID } from '../ai-agents'
 import {
   PDF_AGENT_ID,
-  PDF_TEXT_READER_AGENT_ID,
   ROOM_DIMENSIONS_TOOL_ID,
   createRoomDimensionsVisionTool,
   createProcessPdfTool,
@@ -290,16 +289,13 @@ describe('property_documents.process_pdf', () => {
     expect(result).toMatchObject({ ok: true, fileName: 'input.pdf', pageCount: 3 })
   })
 
-  it('rejects multiple staged PDFs before the text-reader model can inspect them', async () => {
+  it('rejects multiple staged PDFs before the intake agent can inspect them', async () => {
     const { root } = await makeWorkspace()
     await writeFile(path.join(root, SESSION_TOKEN, 'in', 'second.pdf'), '%PDF-1.4\nsecond')
     const runtime = makeRuntime(root)
     const tool = createProcessPdfTool(runtime)
 
-    const result = await tool.handler(
-      { operation: 'inspect' },
-      makeContext(PDF_TEXT_READER_AGENT_ID),
-    )
+    const result = await tool.handler({ operation: 'inspect' }, makeContext())
 
     expect(result).toEqual({
       ok: false,
@@ -308,6 +304,20 @@ describe('property_documents.process_pdf', () => {
       fileName: null,
       pageCount: null,
     })
+    expect(runtime.calls).toEqual([])
+  })
+
+  it('rejects the retired PDF text reader identity', async () => {
+    const { root } = await makeWorkspace()
+    const runtime = makeRuntime(root)
+    const tool = createProcessPdfTool(runtime)
+
+    await expect(
+      tool.handler(
+        { operation: 'inspect' },
+        makeContext('property_documents.pdf_text_reader'),
+      ),
+    ).rejects.toThrow('[internal] PDF tool active agent mismatch')
     expect(runtime.calls).toEqual([])
   })
 
