@@ -63,16 +63,73 @@ jobs:
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
 
+  # The OpenCode agent runtime. A separate job rather than a second step in
+  # `build`: it shares no layers with the app image and takes seconds, so running
+  # it in parallel keeps it off the app build's critical path.
+  #
+  # Compose runs OpenCode straight from the published base image and bind-mounts
+  # the entrypoint, AGENTS.md, agents/ and skills/ out of the working tree. ECS
+  # has no bind mounts, so that base image alone would boot an OpenCode with no
+  # agents and no generated config. docker/opencode/Dockerfile bakes exactly
+  # those four things on top of the same base — that is the only reason this
+  # image exists.
+  opencode:
+    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Short SHA
+        id: sha
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          # The directory, not the repo root: the Dockerfile COPYs AGENTS.md,
+          # entrypoint.sh, agents/ and skills/ by bare name, relative to it.
+          context: ./docker/opencode
+          push: true
+          # Same x86_64 constraint as the app image. The base is multi-arch
+          # (linux/amd64 + linux/arm64), so this pins the arch ECS can run.
+          platforms: linux/amd64
+          # OPENCODE_BASE_IMAGE is deliberately NOT passed. Its default lives in
+          # docker/opencode/Dockerfile, pinned to the same tag the compose files
+          # use, so the base version is bumped in one greppable place instead of
+          # drifting between compose and CI.
+          tags: |
+            ${{ env.IMAGE }}:opencode
+            ${{ env.IMAGE }}:opencode-sha-${{ steps.sha.outputs.short }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          # No registry cache: a handful of COPY layers over a pulled base, so
+          # pushing and restoring a cache would cost more than it saves.
+
   deploy:
     # Every green image on main is a deploy. The infra repo's workflow pulls the
     # mutable `:main` tag and does force-new-deployment, so the trigger is all that
     # is needed here — no tag or digest has to be passed along.
     #
-    # `needs: build` means this only runs when the image actually published, and the
+    # `needs` means this only runs when BOTH images actually published, and the
     # ref guard keeps feature-branch dispatches from deploying. The job is included in
     # the `docker-main` concurrency group above, so a build superseded by a newer
     # commit cancels its deploy too rather than racing it.
-    needs: build
+    #
+    # It waits on `opencode` as well because the task definition pins both images
+    # by tag: deploying an app revision whose agent runtime never rebuilt would
+    # silently run agents against stale baked-in agent files.
+    needs: [build, opencode]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:

@@ -62,7 +62,12 @@ while true; do
     continue
   fi
 
-  cd /app/apps/mercato || { sleep 60; continue; }
+  # /app/apps/mercato is the MONOREPO layout. A scaffolded starter (this repo)
+  # keeps package.json at /app and ships no apps/ directory at all, so the
+  # unconditional cd fails on every pass and the loop never reaches key
+  # provisioning: the container stays up, the healthcheck stays red, and
+  # nothing in the log says why. Try the monorepo path, then the workspace root.
+  cd /app/apps/mercato 2>/dev/null || cd /app || { sleep 60; continue; }
 
   echo "[mcp] Ensuring MCP API key at ${KEY_FILE}..."
   if ! yarn mercato ai_assistant mcp:ensure-api-key --file "${KEY_FILE}"; then
