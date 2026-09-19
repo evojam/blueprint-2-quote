@@ -602,7 +602,7 @@
   "profile.title": "프로필",
   "resources.messageObjects.resource.title": "리소스",
   "rfq_intake.workflows.commands.deal.advance": "RFQ: 사건을 파이프라인 단계로 이동",
-  "rfq_intake.workflows.commands.plans.analyze": "RFQ 도면 분석",
+  "rfq_intake.workflows.commands.measure-rooms": "RFQ: PDF 페이지에서 방 치수 측정",
   "rfq_intake.workflows.commands.quote.create": "RFQ: 사건에서 견적 생성",
   "rfq_intake.workflows.commands.requirements.match": "요구사항을 카탈로그에 매칭",
   "rules.nav.group": "비즈니스 규칙",

@@ -602,7 +602,7 @@
   "profile.title": "Perfil",
   "resources.messageObjects.resource.title": "Resource",
   "rfq_intake.workflows.commands.deal.advance": "RFQ: mover el caso a una etapa del embudo",
-  "rfq_intake.workflows.commands.plans.analyze": "Analizar los planos de la solicitud",
+  "rfq_intake.workflows.commands.measure-rooms": "RFQ: medir las habitaciones a partir de las páginas del PDF",
   "rfq_intake.workflows.commands.quote.create": "RFQ: crear un presupuesto a partir del caso",
   "rfq_intake.workflows.commands.requirements.match": "Asociar los requisitos al catálogo",
   "rules.nav.group": "Reglas de negocio",
