@@ -287,7 +287,27 @@ const createQuoteCommand: CommandHandler<Record<string, unknown>, QuoteCreateRes
       },
     )
 
-    return { quoteId: created?.quoteId ?? null, lineCount: lines.length, warnings }
+    const quoteId = created?.quoteId ?? null
+
+    // Post-commit on purpose. `deal_links.document_links.create` writes through its own
+    // EntityManager and flushes immediately, so it does not join a caller's transaction:
+    // calling it earlier would leave a link row behind if the quote write then failed,
+    // and the module exposes no delete path. The quote is the valuable artefact here, so
+    // a failed link is reported rather than thrown - losing the tab is recoverable,
+    // losing the quote is not.
+    if (quoteId) {
+      try {
+        await runCommand(ctx, 'deal_links.document_links.create', {
+          dealId: input.dealId,
+          documentId: quoteId,
+          documentKind: 'quote',
+        })
+      } catch {
+        warnings.push('deal_link_failed')
+      }
+    }
+
+    return { quoteId, lineCount: lines.length, warnings }
   },
 }
 
