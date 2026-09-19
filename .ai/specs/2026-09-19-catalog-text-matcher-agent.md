@@ -64,7 +64,7 @@ The agent does not classify whether a catalog record is a service. Every `catalo
 
 Input `text` must be a trimmed non-empty string no longer than 4,000 characters. The installed native-agent contract has no per-agent input Zod schema, so the prompt treats malformed or oversized input as invalid and returns `{ matches: [], unmatchedTerms: [] }` without calling catalog tools. Output validation remains deterministic through Zod.
 
-The search call uses `{ q: text, limit: candidateLimit }`, where `candidateLimit = min(30, max(10, limit * 3))`. The agent may call `catalog.get_product_bundle` only for candidate IDs returned by the search and for no more than `limit` candidates. Matches have unique IDs, are sorted by descending score, and are truncated to `limit`.
+The search call uses `{ q: normalizedQuery, limit: candidateLimit }`, where `normalizedQuery` is one to four product/service terms derived from the full input by removing measurements, quantities, addresses, and generic location wording and normalizing inflected action terms to their catalog noun/base form. `candidateLimit = min(30, max(10, limit * 3))`. If normalization finds no product/service term, the agent returns no matches without searching and records the material input in `unmatchedTerms`. Otherwise it calls search exactly once. The agent may call `catalog.get_product_bundle` only for candidate IDs returned by that search and for no more than `limit` candidates. Matches have unique IDs, are sorted by descending score, and are truncated to `limit`.
 
 ## Users, Permissions, and Scope
 
@@ -89,7 +89,8 @@ The search call uses `{ q: text, limit: candidateLimit }`, where `candidateLimit
 Playground / INVOKE_AGENT
   -> trusted run scope + { text, limit? }
   -> property_documents.catalog_matcher
-       -> catalog.search_products({ q, candidateLimit })
+       -> derive normalized 1..4-term catalog query
+       -> catalog.search_products({ q: normalizedQuery, candidateLimit })
        -> catalog.get_product_bundle({ productId }) for selected candidates
   -> strict { kind: "research", data: { matches, unmatchedTerms } }
   -> Agent Orchestrator persists advisory run result
@@ -105,7 +106,7 @@ Playground / INVOKE_AGENT
 ### Journey J-001 — Match document text to catalog products
 
 1. An authorized user or workflow invokes `property_documents.catalog_matcher` with `{ text, limit? }`.
-2. The agent searches the active tenant and organization catalog without applying a service marker.
+2. The agent removes measurements and generic location wording, normalizes inflected action terms to a catalog-oriented noun or base form, and searches the active tenant and organization catalog without applying a service marker.
 3. It optionally fetches details for the strongest returned candidates.
 4. It returns up to `limit` grounded matches ordered by score, plus material unmatched terms.
 5. Missing scope, denied `catalog.products.view`, or tool failure ends the run as an error; weak evidence returns a successful empty match list.
@@ -193,7 +194,7 @@ This change adds one new stable AI agent ID and does not modify existing IDs, to
 | Risk / tradeoff | Impact | Mitigation / detection | Residual risk |
 |---|---|---|---|
 | Model score is not calibrated | Consumers may over-trust small score differences | Document advisory semantics, threshold weak matches, expose concrete evidence | Human review may still be needed |
-| Search returns a narrow candidate set | Correct product may never reach model ranking | Reuse hybrid search and retrieve up to three times requested limit, capped at 30 | Index quality still bounds recall |
+| Search returns a narrow candidate set | Correct product may never reach model ranking | Normalize the input to 1–4 catalog-oriented terms before one hybrid search and retrieve up to three times requested limit, capped at 30 | Index quality and model query normalization still bound recall |
 | Product data contains prompt-like text | Candidate content could try to redirect the model | Explicit untrusted-data rule and closed read-only tool allowlist | Provider guardrails remain probabilistic |
 | Native contract lacks an input Zod schema | Malformed input rejection is prompt-enforced | Exact input instructions and live invalid-input smoke when runtime is available | Not equivalent to deterministic request validation |
 | Bundle calls consume steps/tokens | Large requests could be slow or expensive | `limit <= 10`, candidate cap 30, bundle cap equal to result limit, loop max four | Provider latency remains external |
@@ -203,6 +204,7 @@ This change adds one new stable AI agent ID and does not modify existing IDs, to
 - [ ] **AC-001** — Running `property_documents.catalog_matcher` with the sample text and `limit: 5` returns no more than five unique matches sorted by descending score, with every ID and title grounded in catalog tool results.
 - [ ] **AC-002** — Every returned match has score `>= 0.60`, concrete evidence, and a concise reason; no credible match produces `matches: []` rather than a fabricated record.
 - [ ] **AC-003** — The agent is native and read-only, exposes only `catalog.search_products` and `catalog.get_product_bundle`, and missing catalog ACL or trusted scope fails closed.
+- [ ] **AC-004** — With scoped product `Malowanie ścian`, input `Pomalowanie lokalu 120 m²` retrieves and returns that product without listing the unfiltered catalog.
 
 ## Final Compliance Report
 

@@ -3,6 +3,13 @@ import { describe, expect, it, jest } from '@jest/globals'
 jest.mock('../room-dimensions-vision', () => ({
   roomDimensionsVisionService: { analyzeImage: jest.fn() },
 }))
+jest.mock('../litellm-provider', () => ({
+  registerLiteLlmChatProvider: jest.fn(),
+}))
+jest.mock('@open-mercato/ai-assistant/modules/ai_assistant/lib/agent-registry', () => ({
+  getAgent: jest.fn(() => undefined),
+}))
+
 
 import '../../../modules'
 import '../di'

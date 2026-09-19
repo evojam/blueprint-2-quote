@@ -1,4 +1,8 @@
-import { describe, expect, it } from '@jest/globals'
+import { describe, expect, it, jest } from '@jest/globals'
+
+jest.mock('@open-mercato/ai-assistant/modules/ai_assistant/lib/agent-registry', () => ({
+  getAgent: jest.fn(() => undefined),
+}))
 import {
   ensureAgentsLoaded,
   getAgentEntry,
