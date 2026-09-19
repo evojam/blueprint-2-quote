@@ -110,7 +110,10 @@ async function executeCreateRfqAction(
     'new',
   )
 
-  const result = await executeCommand<Record<string, unknown>, { entityId?: string; id?: string }>(
+  const result = await executeCommand<
+    Record<string, unknown>,
+    { dealId?: string; entityId?: string; id?: string }
+  >(
     hCtx,
     'customers.deals.create',
     {
@@ -127,7 +130,9 @@ async function executeCreateRfqAction(
     },
   )
 
-  const dealId = result?.entityId ?? result?.id
+  // `customers.deals.create` returns `{ dealId }` (commands/deals.ts:640); the other two
+  // keys are only a guard in case the command's result shape changes.
+  const dealId = result?.dealId ?? result?.entityId ?? result?.id
   if (!dealId) {
     throw new ExecutionError('Deal creation returned no id; the RFQ was not opened.', 500)
   }
@@ -152,7 +157,15 @@ export const inboxActions: InboxActionDefinition[] = [
       'A property or renovation enquiry that arrives with a PDF brief, floor plan, or drawing is a create_quote action, even when no prices are mentioned: accepting it opens the case and starts the document analysis.',
       'For create_quote: always carry customerEmail when the thread reveals it, plus customerPhone and companyName when the signature or body gives them. They are used to guarantee the CRM contact before the case is opened.',
       'For create_quote: customerName must be the sender\'s full personal name as written in the signature or the From header (both given and family name, e.g. "Marek Grochala"), not a greeting, not a role, and not the company. Fall back to the company name only when the thread names no person at all.',
-      'For a create_quote that is a property or renovation enquiry: do not invent currencyCode, prices, or line items that the thread does not state. An enquiry whose detail lives in an attached PDF may carry no line items at all.',
+      'For a create_quote that is a property or renovation enquiry: do not invent prices or line items that the thread does not state. An enquiry whose detail lives in an attached PDF may carry no line items at all.',
+      // HACK(hackathon): currencyCode is unused by this action — the RFQ case carries no
+      // money. It is emitted only to silence the installed `no_currency_resolved`
+      // discrepancy, which fires on EVERY create_quote because `SalesChannel` has no
+      // `currencyCode` column for `enrichOrderPayload` (payloadEnrichment.ts:77) to read.
+      // What breaks: a non-PLN enquiry gets PLN stamped on a field nobody reads. The real
+      // fix is upstream — either give the channel a default currency or stop raising the
+      // warning for quotes without line items.
+      'For create_quote: set currencyCode to "PLN" unless the thread names a different currency.',
     ],
     execute: executeCreateRfqAction,
   },

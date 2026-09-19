@@ -56,10 +56,17 @@ if (storageS3Enabled) {
   enabledModules.push({ id: 'storage_s3', from: '@open-mercato/storage-s3' })
 }
 
-const enterpriseModulesEnabled = parseBooleanWithDefault(process.env.OM_ENABLE_ENTERPRISE_MODULES, false)
+// This app does not work without the enterprise modules: `rfq_intake`,
+// `property_documents` and `agent_examples` all hang off the agent orchestrator, so
+// with these two off `yarn generate` writes a registry WITHOUT them and the inbox
+// `create_quote` override silently reverts to the installed sales action. The
+// scaffold defaults them to `false`, which is right for a stock app and wrong here —
+// and it fails quietly at BUILD time, not at runtime. Default them ON and keep the
+// env vars as an explicit opt-OUT. SSO and security stay off: nothing here needs them.
+const enterpriseModulesEnabled = parseBooleanWithDefault(process.env.OM_ENABLE_ENTERPRISE_MODULES, true)
 const enterpriseSsoEnabled = parseBooleanWithDefault(process.env.OM_ENABLE_ENTERPRISE_MODULES_SSO, false)
 const enterpriseSecurityEnabled = parseBooleanWithDefault(process.env.OM_ENABLE_ENTERPRISE_MODULES_SECURITY, false)
-const enterpriseAgentsEnabled = parseBooleanWithDefault(process.env.OM_ENABLE_ENTERPRISE_MODULES_AGENTS, false)
+const enterpriseAgentsEnabled = parseBooleanWithDefault(process.env.OM_ENABLE_ENTERPRISE_MODULES_AGENTS, true)
 
 if (enterpriseModulesEnabled) {
   enabledModules.push(
