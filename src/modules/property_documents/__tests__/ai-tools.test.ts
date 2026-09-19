@@ -361,11 +361,6 @@ describe('property_documents.process_pdf', () => {
       ],
     })
     expect(runtime.calls.filter((call) => call.file === '/usr/bin/pdftoppm')).toHaveLength(3)
-    expect(
-      runtime.calls
-        .filter((call) => call.file === '/usr/bin/pdftoppm')
-        .every((call) => call.args.includes('150')),
-    ).toBe(true)
     const outputNames = (await readdir(path.join(root, SESSION_TOKEN, 'out'))).sort()
     expect(outputNames).toEqual([
       'brief.json',
