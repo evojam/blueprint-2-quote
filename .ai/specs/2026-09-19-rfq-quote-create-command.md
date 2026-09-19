@@ -256,7 +256,18 @@ What the probe proves, in order: the command is in the vocabulary (gates 1–2),
 
 ## 📝 UI/UX
 
-No new page and no new component. A successful run produces an ordinary unsent Sales quote; operators edit lines, dates, customer, channel and prices in the existing Sales quote detail, and the existing **Send quote** action remains the only approval boundary.
+No new page and no new component. A successful run produces an ordinary **unsent** Sales quote, and unsent is the readiness signal: `sentAt` is null and no `acceptanceToken` exists until a human acts.
+
+Operators edit lines, dates, customer and prices in the existing Sales quote detail. **Nothing guards that editing** — `sales.quotes.update`, `quotes.lines.upsert` and `quotes.lines.delete` carry no sent-state check, and the module has no editability helper at all, so a quote can be corrected freely before it goes out.
+
+Approval is the existing **Send quote** action. Two things about it are worth stating precisely, because both constrain later work:
+
+- It is an **HTTP route** (`sales/api/quotes/send`), **not a command**. There is no `sales.quotes.send` on the command bus, so nothing in a workflow or an agent proposal can invoke it. Approval stays a human action in the UI by construction, not by policy.
+- It does more than approve: it generates an `acceptanceToken`, sets `sentAt`, flips `status` to `sent`, and **e-mails the customer**. There is no separate internal sign-off step.
+
+Sales already owns the reverse transition. `sales.quotes.update` (`commands/documents.ts:5262`) detects a quote whose status is `sent`, and on any successful update clears `acceptanceToken` and `sentAt` and sets `status = 'draft'` — so correcting a price after sending revokes the customer's acceptance link rather than leaving it live against a stale amount.
+
+**This spec does not set a status at creation.** It could: passing `statusEntryId` would render a visible `draft` label matching the value Sales itself writes. But the value resolves through the `sales.order_status` dictionary, nothing in this application creates that dictionary, and `sales.setup.seedDefaults` seeds only shipping and payment methods — it is created lazily, and only when an operator opens a settings page. Until a seed step exists, `statusEntryId` would resolve to null and the label would not appear. Unsent is therefore the readiness signal for now, and a visible status is a follow-up once the flow has been exercised end to end.
 
 ## 📝 Edge Cases & Failure Scenarios
 
