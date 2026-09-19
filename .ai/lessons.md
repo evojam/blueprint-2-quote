@@ -28,8 +28,9 @@ rg -l '"<area>"|"<module>"|"<topic>"' .ai/lessons/*.md
 
 ### ai-workflow
 
-- [Carry file-agent options through runtime and policy generation](lessons/file-agent-options-need-runtime-and-policy.md) — area:ai-workflow,framework-context; module:agent_orchestrator,property_documents; topic:file-agents,artifacts,attachments,workflows,litellm,tool-calls
+14: - [Carry file-agent options through runtime and policy generation](lessons/file-agent-options-need-runtime-and-policy.md) — area:ai-workflow,framework-context; module:agent_orchestrator,property_documents; topic:file-agents,artifacts,attachments,workflows,litellm,tool-calls,structured-output,outcome-projection
 
 ### umes
 
 - [Overriding an inbox action buys the execution schema, not the edit schema](lessons/inbox-action-override-owns-only-execution-schema.md) — area:umes,module-data,framework-context; module:inbox_ops,rfq_intake,sales; topic:inbox-actions,validation,action-overrides,two-sources-of-truth
+15: topics: ["file-agents", "artifacts", "attachments", "workflows", "litellm", "tool-calls", "structured-output", "outcome-projection"]

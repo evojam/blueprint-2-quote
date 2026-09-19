@@ -132,9 +132,9 @@ e-mail (PDF)
       -> workflow `rfq_intake.analysis`:
            START
            -> INVOKE_AGENT  property_documents.pdf_intake -> brief.json, pdf-pages.json, N page PNGs
-           -> AUTOMATED rfq_intake.requirements.match -> grouped catalog matcher
            -> AUTOMATED rfq_intake.measure-rooms -> validate manifest; sequentially for EACH PNG:
                 artifact.promote to CustomerDeal -> agentRuntime.run(room_measurements, one attachment)
+           -> AUTOMATED rfq_intake.requirements.match -> grouped catalog matcher
            -> END
 ```
 
@@ -212,8 +212,8 @@ The prefix `rfq_intake.` is not in the event-trigger subscriber's excluded list 
 | TEST-014 | unit | Seeded funnel; then an unseeded organization | Execute `rfq_intake.deal.advance` | The stage resolves by position and `customers.deals.update` is called with it; unseeded is reported as `moved: false` with no deal write; an unknown stage key is rejected | REQ-007 |
 | TEST-015 | unit | The generated workflow registry | Read `rfq_intake.analysis` | The activity chain is `advance(quoting)` → `pdf_intake` → plans → requirements → `advance(review)` | REQ-007 |
 | TEST-005 | manual (demo) | Enterprise + agents flags on, seeded org, RFQ e-mail with PDF | Accept the action in the Inbox | The deal exists in the pipeline; `property_documents.pdf_intake` produces `brief.json`, `pdf-pages.json`, and one `room_measurements` run per rendered page | REQ-001, REQ-002, REQ-008 |
-| TEST-016 | unit | Successful scoped PDF run with `pdf-pages.json` listing three PNGs and matching artifacts | Execute `rfq_intake.measure-rooms` with deferred agent results | Each artifact is promoted and its single-attachment `room_measurements` run finishes before the next page starts; manifests/foreign/non-PNG artifacts are rejected before runtime handoff; one failed run does not suppress later pages | REQ-002, REQ-008 |
-| TEST-017 | unit | Generated `rfq_intake.analysis` definition | Validate with `workflowDefinitionDataSchema` | PDF intake transitions to catalog matching, then page measurement fan-out, then end; no later stage starts before its predecessor completes | REQ-008 |
+| TEST-016 | unit | Successful scoped PDF run with `pdf-pages.json` listing three PNGs and matching artifacts | Execute `rfq_intake.measure-rooms` with deferred agent results | Each artifact is promoted and its single-attachment `room_measurements` run finishes before the next page starts; the command returns each validated measurement set with its page filename only when its dimensions match the verified source PNG; manifests/foreign/non-PNG artifacts and fabricated mismatched results are rejected; one failed run does not suppress later pages | REQ-002, REQ-008 |
+| TEST-017 | unit | Generated `rfq_intake.analysis` definition | Validate with `workflowDefinitionDataSchema` | PDF intake transitions to page measurement, then catalog matching, then end; no later stage starts before its predecessor completes | REQ-008 |
 
 TEST-005 is deliberately manual for this slice: an automated end-to-end run would need the OpenCode agent runtime in CI, which is its own piece of work. `HACK(hackathon)` noted at the seam.
 
@@ -222,7 +222,7 @@ TEST-005 is deliberately manual for this slice: an automated end-to-end run woul
 ### Phase 1 — RFQ is saved and the analysis starts
 
 - **Depends on:** `property_documents.pdf_intake`, already merged to `main`; `OM_ENABLE_ENTERPRISE_MODULES=true` and `OM_ENABLE_ENTERPRISE_MODULES_AGENTS=true` locally.
-- **Outcome:** accepting the inbox action opens the CRM case, guarantees the contact, invokes PDF intake, then runs catalog matching and one strict room-measurement extraction per rendered page sequentially.
+- **Outcome:** accepting the inbox action opens the CRM case, guarantees the contact, invokes PDF intake, runs one strict room-measurement extraction per rendered page sequentially, then matches the extracted requirements against the catalog.
 - **Deliverables:** `src/modules/rfq_intake/{index.ts,inbox-actions.ts,events.ts,setup.ts,cli.ts,workflows.ts,subscribers/start-rfq-analysis.ts,commands/analysis.ts,commands/pipeline.ts,lib/ensureContact.ts,lib/pipeline.ts,lib/commandBus.ts}`; `rfq_intake` added to `src/modules.ts` **after** `sales`; i18n label change in `src/i18n/pl.json` and its English counterpart; the denylist filter in `src/bootstrap-common.ts`.
 - **Requirements closed:** REQ-001 … REQ-008
 - **Tests:** TEST-001 … TEST-004 and TEST-006 … TEST-017 automated, TEST-005 manual
@@ -237,12 +237,12 @@ TEST-005 is deliberately manual for this slice: an automated end-to-end run woul
 4. Add the contact guarantee to the override's `execute`: resolve by e-mail via `resolveCustomerEntityIdByEmail`, create through `customers.people.create` or enrich empty fields through `customers.people.update`, ensure the company when the payload names one, then open the deal through `customers.deals.create` with that `customerEntityId`, the pipeline's first stage, and the source proposal and e-mail recorded on it. Idempotent by e-mail, so it stays a no-op when the worker's own contact action already ran. TEST-006 … TEST-009.
 5. Add `events.ts` declaring `rfq_intake.rfq.created` and the subscriber on `inbox_ops.action.executed`, emitting post-commit with the attachment-shaped payload. TEST-001, TEST-002.
 6. Add the two looping commands. `rfq_intake.plans.analyze` reads `floor-plans.json` from the run's artifacts and, per plan, promotes the PNG through `agent_orchestrator.artifact.promote` and calls `agentRuntime.run('property_documents.room_dimensions', …)` with the workflow instance and step ids. `rfq_intake.requirements.match` reads `brief.json` and calls `agentRuntime.run('property_documents.catalog_matcher', { text, limit })` once per requirement. One item failing is recorded and the loop continues. TEST-011, TEST-012.
-7. Add `workflows.ts` with `rfq_intake.analysis` — the chain above, and an embedded event trigger on `rfq_intake.rfq.created` with a 1:1 `contextMapping`. The steps after the agent need no `outputMapping`: they correlate by `workflowInstanceId` and read the run's artifacts directly, which is also what lets them see files the workflow context never carries. Cast the activity type where `@open-mercato/shared`'s stale `ActivityType` union rejects `INVOKE_AGENT`, with a comment naming the reason. The same file registers every command the graph calls through `registerWorkflowSafeCommands` — a command a workflow calls must be declared workflow-safe, and a new one is **not** `defaultEnabled`, so the demo tenant has to enable them in settings. TEST-004.
+7. Add `workflows.ts` with `rfq_intake.analysis` — PDF intake followed by page measurement and catalog matching, with strict interpolation. Both commands must be registered workflow-safe. Cast the activity type where `@open-mercato/shared`'s stale `ActivityType` union rejects `INVOKE_AGENT`, with a comment naming the reason. TEST-004.
 8. Filter `registerCodeWorkflows` in `src/bootstrap-common.ts` against a named denylist — `workflows.simple-approval`, `workflows.checkout-demo`, `sales.order-approval` — with a comment stating that the first two are shipped demos and the third is a deliberate product removal. TEST-010.
 9. Define the funnel in `lib/pipeline.ts` (six stages, addressed by position), seed it from `setup.ts` at `mercato init` and from `mercato rfq_intake seed-pipeline` for organizations that already exist, and add `rfq_intake.deal.advance` plus the two stage steps that bracket the chain. TEST-013 … TEST-015.
 10. Run TEST-005 by hand end to end; record what actually happened, including anything stubbed.
-11. Extend `commands/analysis.ts` with `rfq_intake.measure-rooms`. It loads only the successful PDF intake run in the workflow's trusted scope, verifies `pdf-pages.json` and every listed `AgentRunArtifact`, promotes every rendered PNG to `customers:customer_deal/${dealId}`, then starts `room_measurements` with exactly `{ __files: { attachments: [{ attachmentId, as: pageFileName }] } }` and a stable per-artifact invocation ID. Use `Promise.allSettled` so every valid page is attempted concurrently and report per-page failures without skipping sibling pages. TEST-016.
-12. Replace the direct intake-to-matcher transition with the sequential `match_catalog` → `measure_rooms` pipeline → end. Register the measurement command workflow-safe and retain strict interpolation. TEST-017.
+11. Extend `commands/analysis.ts` with `rfq_intake.measure-rooms`. It loads only the successful PDF intake run in the workflow's trusted scope, verifies `pdf-pages.json` and every listed `AgentRunArtifact`, promotes every rendered PNG to `customers:customer_deal/${dealId}`, then starts `room_measurements` with exactly `{ __files: { attachments: [{ attachmentId, as: pageFileName }] } }` and a stable per-artifact invocation ID. Process pages sequentially, validate and return every successful measurement set with its source filename, and report per-page failures without skipping later pages. TEST-016.
+12. Keep the linear `extract_pdf` → `measure_rooms` → `match_catalog` transition chain and strict interpolation. TEST-017.
 
 ### Phase 2 — From analysis to a priced offer (out of scope here)
 
@@ -330,3 +330,7 @@ Verdict: `Ready for implementation`.
 | 2026-10-11 | Chose per-PNG room-measurement fan-out and specified the post-intake parallel fork/join. |
 | 2026-10-11 | Replaced the stalled post-agent fork/join with a sequential catalog-match then page-measurement pipeline; reported upstream as open-mercato/open-mercato#6280. |
 | 2026-10-11 | Serialized per-page room measurements: the OpenCode workspace already serializes execution, while concurrent session creation correlated with every page run losing MCP session authorization. |
+| 2026-10-11 | Temporarily removed catalog matching from the RFQ workflow so PDF intake transitions directly to sequential page measurement. |
+| 2026-10-11 | Restored catalog matching after sequential room measurements, keeping the two OpenCode stages ordered rather than concurrent. |
+| 2026-10-11 | Included validated per-page measurement sets in the `measure_rooms` workflow result instead of discarding successful agent outputs and returning counts only. |
+| 2026-10-11 | Replaced the Anthropic-incompatible 30-union structured-output schema with schema-free JSON generation followed by full server-side candidate validation; measurement results must also match the source PNG dimensions. |
