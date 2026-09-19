@@ -1,9 +1,9 @@
 ---
 kind: artifact
 ---
-The PDF processing tool is the only output writer. A successful finalization atomically creates validated `brief.json`, `floor-plans.json`, and one `floor-plan-page-####.png` for every page classified as a floor plan. List only the two JSON manifests in the `artifacts` argument passed to `submit_outcome`; filesystem-authoritative capture collects the server-authored PNG files from `out/`.
+The PDF processing tool is the only output writer. Successful finalization creates strict `brief.json`, strict `pdf-pages.json`, and one `pdf-page-####.png` for every source page. List exactly the two JSON control files in the `artifacts` argument passed to `submit_outcome`; filesystem-authoritative capture collects every server-authored PNG from `out/`.
 
-A safely rejected document leaves only the tool-authored, schema-valid `processing-error.json`. Never submit a partial success artifact set.
+A safely rejected document leaves only the tool-authored `processing-error.json`. Never submit a partial success artifact set.
 
 Pass a complete outcome object. On success, use this shape:
 
@@ -12,19 +12,17 @@ Pass a complete outcome object. On success, use this shape:
   "kind": "artifact",
   "artifacts": [
     {
-      "path": "brief.json",
       "fileName": "brief.json",
       "mimeType": "application/json",
-      "caption": "Validated property brief manifest."
+      "caption": "Exact raw text extracted from the PDF."
     },
     {
-      "path": "floor-plans.json",
-      "fileName": "floor-plans.json",
+      "fileName": "pdf-pages.json",
       "mimeType": "application/json",
-      "caption": "Validated floor-plan manifest."
+      "caption": "Ordered inventory of rendered PDF pages."
     }
   ],
-  "summary": "Processed the PDF into a property brief and floor-plan artifacts."
+  "summary": "Extracted the raw PDF text and rendered every page."
 }
 ```
 
@@ -35,7 +33,6 @@ After a rejected document or failed finalization, use this shape:
   "kind": "artifact",
   "artifacts": [
     {
-      "path": "processing-error.json",
       "fileName": "processing-error.json",
       "mimeType": "application/json",
       "caption": "PDF processing error report."

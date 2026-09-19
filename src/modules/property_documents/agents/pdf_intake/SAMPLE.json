@@ -1,5 +1,5 @@
 {
-  "task": "Parse the textual brief and extract every plan-view drawing page.",
+  "task": "Extract the exact raw text and render every PDF page.",
   "__files": {
     "attachments": [
       {

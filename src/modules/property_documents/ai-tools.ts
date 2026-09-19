@@ -34,38 +34,9 @@ const PDFTOTEXT = '/usr/bin/pdftotext'
 const PDFTOPPM = '/usr/bin/pdftoppm'
 const INSPECTION_FILE = '.inspection.json'
 const EXEC_TIMEOUT_MS = 60_000
-const OPENCODE_PROJECT_ROOT = '/home/opencode'
 const EXEC_MAX_BUFFER = 1024 * 1024
 const MAX_ROOM_IMAGE_BYTES = 20 * 1024 * 1024
 
-const pageNumberSchema = z.number().int().min(1).max(MAX_PDF_PAGES)
-const sortedPageListSchema = z
-  .array(pageNumberSchema)
-  .max(MAX_PDF_PAGES)
-  .superRefine((pages, context) => {
-    for (let index = 0; index < pages.length; index += 1) {
-      if (index > 0 && pages[index]! <= pages[index - 1]!) {
-        context.addIssue({
-          code: 'custom',
-          message: 'pages must be sorted and unique',
-          path: [index],
-        })
-      }
-    }
-  })
-
-const sourcePagesSchema = sortedPageListSchema
-const sourceSchema = z
-  .object({
-    fileName: z.string().min(1).max(255),
-    pageCount: z.number().int().min(1).max(MAX_PDF_PAGES),
-  })
-  .strict()
-const briefSourceSchema = sourceSchema
-  .extend({ briefPages: sortedPageListSchema })
-  .strict()
-const warningSchema = z.string().min(1).max(1_000)
-const nullableBoundedString = (max: number) => z.string().max(max).nullable()
 
 export const roomDimensionSchema = z
   .object({
@@ -98,181 +69,11 @@ export const roomDimensionsVisionResultSchema = z
 
 const roomDimensionsVisionInputSchema = z.object({}).strict()
 
-export const briefManifestSchema = z
-  .object({
-    schemaVersion: z.literal(1),
-    source: briefSourceSchema,
-    language: z.string().min(1).max(32),
-    title: nullableBoundedString(500),
-    summary: z.string().max(5_000),
-    sections: z
-      .array(
-        z
-          .object({
-            heading: nullableBoundedString(500),
-            text: z.string().min(1).max(20_000),
-            sourcePages: sourcePagesSchema,
-          })
-          .strict(),
-      )
-      .max(100),
-    requirements: z
-      .array(
-        z
-          .object({
-            category: z.string().min(1).max(200),
-            text: z.string().min(1).max(4_000),
-            sourcePages: sourcePagesSchema,
-          })
-          .strict(),
-      )
-      .max(200),
-    keyFacts: z
-      .array(
-        z
-          .object({
-            label: z.string().min(1).max(200),
-            value: z.string().min(1).max(2_000),
-            sourcePages: sourcePagesSchema,
-          })
-          .strict(),
-      )
-      .max(200),
-    unresolvedItems: z
-      .array(
-        z
-          .object({
-            text: z.string().min(1).max(2_000),
-            sourcePages: sourcePagesSchema,
-          })
-          .strict(),
-      )
-      .max(100),
-    warnings: z.array(warningSchema).max(100),
-    confidence: z.number().finite().min(0).max(1),
-  })
-  .strict()
-
-const planTypeSchema = z.enum([
-  'architectural',
-  'walls',
-  'electrical',
-  'plumbing',
-  'hvac',
-  'lighting',
-  'reflected_ceiling',
-  'fire_safety',
-  'furniture',
-  'demolition',
-  'site',
-  'mixed',
-  'unknown',
-])
-const disciplineSchema = z.enum([
-  'architectural',
-  'walls',
-  'electrical',
-  'plumbing',
-  'hvac',
-  'lighting',
-  'reflected_ceiling',
-  'fire_safety',
-  'furniture',
-  'demolition',
-  'site',
-  'unknown',
-])
-const planInputSchema = z
-  .object({
-    sourcePage: pageNumberSchema,
-    title: nullableBoundedString(500),
-    level: nullableBoundedString(200),
-    primaryType: planTypeSchema,
-    disciplines: z
-      .array(disciplineSchema)
-      .max(12)
-      .superRefine((values, context) => {
-        if (new Set(values).size !== values.length) {
-          context.addIssue({ code: 'custom', message: 'disciplines must be unique' })
-        }
-      }),
-    scale: nullableBoundedString(100),
-    description: z.string().min(1).max(2_000),
-    confidence: z.number().finite().min(0).max(1),
-    evidence: z.array(z.string().min(1).max(500)).max(20),
-  })
-  .strict()
-const otherPageSchema = z
-  .object({
-    sourcePage: pageNumberSchema,
-    reason: z.enum([
-      'cover',
-      'legend',
-      'schedule',
-      'elevation',
-      'section',
-      'detail',
-      'unrelated',
-      'unknown',
-    ]),
-  })
-  .strict()
-export const floorPlansInputSchema = z
-  .object({
-    schemaVersion: z.literal(1),
-    source: sourceSchema,
-    plans: z.array(planInputSchema).max(MAX_PDF_PAGES),
-    otherPages: z.array(otherPageSchema).max(MAX_PDF_PAGES),
-    warnings: z.array(warningSchema).max(100),
-  })
-  .strict()
-
-const inspectInputSchema = z.object({ operation: z.literal('inspect') }).strict()
-const finalizeInputSchema = z
-  .object({
-    operation: z.literal('finalize'),
-    brief: briefManifestSchema,
-    floorPlans: floorPlansInputSchema,
-  })
-  .strict()
-
 export const processPdfInputSchema = z
-  .object({
-    operation: z.enum(['inspect', 'finalize']),
-    brief: briefManifestSchema.optional(),
-    floorPlans: floorPlansInputSchema.optional(),
-  })
+  .object({ operation: z.enum(['inspect', 'finalize']) })
   .strict()
-  .superRefine((input, context) => {
-    if (input.operation === 'inspect') {
-      if (input.brief !== undefined || input.floorPlans !== undefined) {
-        context.addIssue({
-          code: 'custom',
-          message: 'inspect accepts only the operation field',
-        })
-      }
-      return
-    }
-    if (input.brief === undefined) {
-      context.addIssue({
-        code: 'custom',
-        message: 'brief is required for finalization',
-        path: ['brief'],
-      })
-    }
-    if (input.floorPlans === undefined) {
-      context.addIssue({
-        code: 'custom',
-        message: 'floorPlans is required for finalization',
-        path: ['floorPlans'],
-      })
-    }
-  })
 
 type ProcessPdfInput = z.infer<typeof processPdfInputSchema>
-type FinalizeInput = z.infer<typeof finalizeInputSchema>
-type BriefManifest = z.infer<typeof briefManifestSchema>
-type FloorPlansInput = z.infer<typeof floorPlansInputSchema>
 
 type ExecResult = { stdout: string; stderr: string }
 type SessionStore = {
@@ -314,12 +115,13 @@ type InspectSuccess = {
   operation: 'inspect'
   fileName: string
   pageCount: number
-  pages: Array<{ sourcePage: number; textPath: string; previewPath: string }>
+  pages: Array<{ sourcePage: number }>
 }
 
 type FinalizeSuccess = {
   ok: true
   operation: 'finalize'
+  pageCount: number
   artifacts: Array<{ sourcePage: number; path: string }>
   manifests: string[]
 }
@@ -334,7 +136,6 @@ type ProcessingFailure = {
     | 'page_limit_exceeded'
     | 'pdf_runtime_unavailable'
     | 'pdf_processing_failed'
-    | 'artifact_limit_exceeded'
   message: string
   fileName: string | null
   pageCount: number | null
@@ -351,26 +152,6 @@ type InspectionState = {
 
 class PdfRuntimeUnavailableError extends Error {}
 
-function formatManifestValidationMessage(issues: string[]): string {
-  const prefix = 'Manifest validation failed: '
-  const retry = '. Correct all listed issues and retry finalize once.'
-  const details = issues.join('; ')
-  const complete = `${prefix}${details}${retry}`
-  if (complete.length <= 500) return complete
-
-  const omitted = '; additional validation issues omitted'
-  const available = 500 - prefix.length - omitted.length - retry.length
-  const candidate = details.slice(0, available)
-  const boundary = candidate.lastIndexOf('; ')
-  const visible = boundary > 0 ? candidate.slice(0, boundary) : candidate
-  return `${prefix}${visible}${omitted}${retry}`
-}
-
-class PdfManifestValidationError extends Error {
-  constructor(readonly issues: string[]) {
-    super(formatManifestValidationMessage(issues))
-  }
-}
 
 const inspectionStateSchema = z
   .object({
@@ -420,18 +201,6 @@ function assertContained(parent: string, candidate: string, label: string): void
   }
 }
 
-function toAgentReadPath(containerPath: string): string {
-  const relativePath = path.posix.relative(OPENCODE_PROJECT_ROOT, containerPath)
-  if (
-    relativePath.length === 0 ||
-    relativePath === '..' ||
-    relativePath.startsWith('../') ||
-    path.posix.isAbsolute(relativePath)
-  ) {
-    throw new Error('[internal] PDF inspection artifact is outside the OpenCode project root')
-  }
-  return relativePath
-}
 
 export async function resolveSessionWorkspace(
   workspaceRoot: string,
@@ -465,23 +234,6 @@ export async function resolveSessionWorkspace(
   }
 }
 
-export function validateRenderPages(pages: number[], pageCount: number): number[] {
-  if (!Number.isInteger(pageCount) || pageCount < 1 || pageCount > MAX_PDF_PAGES) {
-    throw new Error('[internal] PDF tool has an invalid page count')
-  }
-  const seen = new Set<number>()
-  let previous = 0
-  for (const page of pages) {
-    if (!Number.isInteger(page) || page < 1 || page > pageCount) {
-      throw new Error(`render page ${page} is outside the PDF page range`)
-    }
-    if (seen.has(page)) throw new Error(`render page ${page} must be unique`)
-    if (page <= previous) throw new Error('render pages must be sorted in ascending order')
-    seen.add(page)
-    previous = page
-  }
-  return [...pages]
-}
 
 async function requireActiveWorkspace(
   context: McpToolContext,
@@ -736,51 +488,16 @@ async function inspectPdf(
 
   const analysisDir = path.join(workspace.root, 'analysis')
   const allTextPath = path.join(analysisDir, 'all-pages.txt')
-  const previewPrefix = path.join(analysisDir, 'preview')
   try {
     await rm(analysisDir, { recursive: true, force: true })
     await mkdir(analysisDir, { recursive: true })
     const beforeHash = await sha256File(inputPath)
     await execPdf(runtime, PDFTOTEXT, ['-layout', inputPath, allTextPath])
-    await execPdf(runtime, PDFTOPPM, ['-r', '96', '-png', inputPath, previewPrefix])
     const afterHash = await sha256File(inputPath)
     if (beforeHash !== afterHash) throw new Error('PDF changed during inspection')
 
-    const rawText = await readFile(allTextPath, 'utf8')
-    const textPages = rawText.split('\f')
-    if (textPages.at(-1) === '') textPages.pop()
-    while (textPages.length < info.pageCount) textPages.push('')
-    if (textPages.length > info.pageCount) {
-      textPages[info.pageCount - 1] = textPages.slice(info.pageCount - 1).join('\f')
-      textPages.length = info.pageCount
-    }
-
-    const previewEntries = await readdir(analysisDir)
-    const previews = previewEntries
-      .map((name) => ({ name, match: /^preview-(\d+)\.png$/.exec(name) }))
-      .filter((entry): entry is { name: string; match: RegExpExecArray } => entry.match !== null)
-      .sort((left, right) => Number(left.match[1]) - Number(right.match[1]))
-    if (previews.length !== info.pageCount) {
-      throw new Error(`rendered ${previews.length} previews for ${info.pageCount} pages`)
-    }
-
-    const pages: InspectSuccess['pages'] = []
-    for (let index = 0; index < info.pageCount; index += 1) {
-      const pageNumber = index + 1
-      const suffix = String(pageNumber).padStart(4, '0')
-      const textName = `page-${suffix}.txt`
-      const previewName = `page-${suffix}.png`
-      await writeFile(path.join(analysisDir, textName), textPages[index] ?? '', 'utf8')
-      await rename(path.join(analysisDir, previews[index]!.name), path.join(analysisDir, previewName))
-      pages.push({
-        sourcePage: pageNumber,
-        textPath: toAgentReadPath(path.posix.join(workspace.containerRoot, 'analysis', textName)),
-        previewPath: toAgentReadPath(
-          path.posix.join(workspace.containerRoot, 'analysis', previewName),
-        ),
-      })
-    }
-    await rm(allTextPath, { force: true })
+    const extractedText = await stat(allTextPath)
+    if (!extractedText.isFile()) throw new Error('aggregate PDF text was not created')
     const state: InspectionState = {
       schemaVersion: 1,
       fileName,
@@ -788,7 +505,13 @@ async function inspectPdf(
       sha256: afterHash,
     }
     await writeFile(path.join(analysisDir, INSPECTION_FILE), JSON.stringify(state), 'utf8')
-    return { ok: true, operation: 'inspect', fileName, pageCount: info.pageCount, pages }
+    return {
+      ok: true,
+      operation: 'inspect',
+      fileName,
+      pageCount: info.pageCount,
+      pages: Array.from({ length: info.pageCount }, (_, index) => ({ sourcePage: index + 1 })),
+    }
   } catch (error) {
     await rm(analysisDir, { recursive: true, force: true })
     return {
@@ -800,7 +523,7 @@ async function inspectPdf(
       message:
         error instanceof PdfRuntimeUnavailableError
           ? 'The configured PDF processing runtime is unavailable.'
-          : 'PDF page extraction or preview rendering failed.',
+          : 'PDF text extraction failed.',
       fileName,
       pageCount: info.pageCount,
     }
@@ -812,117 +535,11 @@ async function loadInspection(workspace: SessionWorkspace): Promise<InspectionSt
   return inspectionStateSchema.parse(JSON.parse(raw))
 }
 
-function collectPageList(
-  pages: number[],
-  pageCount: number,
-  label: string,
-  issues: string[],
-): number[] | null {
-  try {
-    return validateRenderPages(pages, pageCount)
-  } catch (error) {
-    issues.push(`${label}: ${error instanceof Error ? error.message : 'invalid page list'}`)
-    return null
-  }
-}
-
-function validateFinalization(
-  input: FinalizeInput,
-  inspection: InspectionState,
-): { brief: BriefManifest; floorPlans: FloorPlansInput; planPages: number[] } {
-  const { brief, floorPlans } = input
-  const issues: string[] = []
-  if (
-    brief.source.fileName !== inspection.fileName ||
-    brief.source.pageCount !== inspection.pageCount
-  ) {
-    issues.push('brief.source does not match the inspected PDF')
-  }
-  if (
-    floorPlans.source.fileName !== inspection.fileName ||
-    floorPlans.source.pageCount !== inspection.pageCount
-  ) {
-    issues.push('floorPlans.source does not match the inspected PDF')
-  }
-
-  const briefPages = collectPageList(
-    brief.source.briefPages,
-    inspection.pageCount,
-    'briefPages',
-    issues,
-  )
-  if (briefPages) {
-    const briefPageSet = new Set(briefPages)
-    for (const [label, entries] of [
-      ['sections', brief.sections],
-      ['requirements', brief.requirements],
-      ['keyFacts', brief.keyFacts],
-      ['unresolvedItems', brief.unresolvedItems],
-    ] as const) {
-      entries.forEach((entry, index) => {
-        const sourcePages = collectPageList(
-          entry.sourcePages,
-          inspection.pageCount,
-          `${label}[${index}].sourcePages`,
-          issues,
-        )
-        if (!sourcePages) return
-        const outside = sourcePages.filter((page) => !briefPageSet.has(page))
-        if (outside.length > 0) {
-          issues.push(
-            `${label}[${index}] contains ${
-              outside.length === 1 ? `page ${outside[0]}` : `pages ${outside.join(', ')}`
-            } outside briefPages`,
-          )
-        }
-      })
-    }
-  }
-
-  const planPages = collectPageList(
-    floorPlans.plans.map((plan) => plan.sourcePage),
-    inspection.pageCount,
-    'floorPlans.plans',
-    issues,
-  )
-  const otherPages = collectPageList(
-    floorPlans.otherPages.map((page) => page.sourcePage),
-    inspection.pageCount,
-    'floorPlans.otherPages',
-    issues,
-  )
-  if (briefPages && planPages && otherPages) {
-    const classified = [...briefPages, ...planPages, ...otherPages]
-    const counts = new Map<number, number>()
-    for (const page of classified) counts.set(page, (counts.get(page) ?? 0) + 1)
-    for (const [page, count] of counts) {
-      if (count > 1) issues.push(`page ${page} is classified more than once`)
-    }
-    const missing = Array.from(
-      { length: inspection.pageCount },
-      (_, index) => index + 1,
-    ).filter((page) => !counts.has(page))
-    if (missing.length > 0) {
-      issues.push(
-        `page classifications are missing ${
-          missing.length === 1 ? `page ${missing[0]}` : `pages ${missing.join(', ')}`
-        }`,
-      )
-    }
-  }
-  if (planPages && planPages.length + 2 > MAX_PDF_ARTIFACTS) {
-    issues.push('final output exceeds the artifact limit')
-  }
-  if (issues.length > 0) throw new PdfManifestValidationError(issues)
-
-  return { brief, floorPlans, planPages: planPages! }
-}
 
 async function finalizePdf(
   runtime: PdfToolRuntime,
   workspace: SessionWorkspace,
   inputPath: string,
-  input: FinalizeInput,
 ): Promise<FinalizeSuccess | ProcessingFailure> {
   const fileName = path.basename(inputPath)
   let pageCount: number | null = null
@@ -932,14 +549,15 @@ async function finalizePdf(
     if (inspection.fileName !== fileName || inspection.sha256 !== (await sha256File(inputPath))) {
       throw new Error('inspected PDF changed before finalization')
     }
-    const { brief, floorPlans, planPages } = validateFinalization(input, inspection)
+    const rawText = await readFile(path.join(workspace.root, 'analysis', 'all-pages.txt'), 'utf8')
     await clearOutput(workspace)
 
     const artifacts: FinalizeSuccess['artifacts'] = []
-    for (const pageNumber of planPages) {
+    const files: string[] = []
+    for (let pageNumber = 1; pageNumber <= inspection.pageCount; pageNumber += 1) {
       const suffix = String(pageNumber).padStart(4, '0')
-      const artifactName = `floor-plan-page-${suffix}.png`
-      const outputPrefix = path.join(workspace.outDir, `floor-plan-page-${suffix}`)
+      const artifactName = `pdf-page-${suffix}.png`
+      const outputPrefix = path.join(workspace.outDir, `pdf-page-${suffix}`)
       await execPdf(runtime, PDFTOPPM, [
         '-f',
         String(pageNumber),
@@ -955,42 +573,32 @@ async function finalizePdf(
       const outputPath = path.join(workspace.outDir, artifactName)
       const outputStat = await stat(outputPath)
       if (!outputStat.isFile() || outputStat.size === 0) throw new Error('empty rendered page')
+      files.push(artifactName)
       artifacts.push({
         sourcePage: pageNumber,
         path: path.posix.join(workspace.containerOutDir, artifactName),
       })
     }
 
-    const floorPlansOutput = {
-      ...floorPlans,
-      plans: floorPlans.plans.map((plan) => ({
-        sourcePage: plan.sourcePage,
-        artifactPath: `floor-plan-page-${String(plan.sourcePage).padStart(4, '0')}.png`,
-        title: plan.title,
-        level: plan.level,
-        primaryType: plan.primaryType,
-        disciplines: plan.disciplines,
-        scale: plan.scale,
-        description: plan.description,
-        confidence: plan.confidence,
-        evidence: plan.evidence,
-      })),
-    }
-
     const briefTemp = path.join(workspace.outDir, '.brief.json.tmp')
-    const plansTemp = path.join(workspace.outDir, '.floor-plans.json.tmp')
-    await writeFile(briefTemp, `${JSON.stringify(brief, null, 2)}\n`, 'utf8')
-    await writeFile(plansTemp, `${JSON.stringify(floorPlansOutput, null, 2)}\n`, 'utf8')
+    const pagesTemp = path.join(workspace.outDir, '.pdf-pages.json.tmp')
+    await writeFile(briefTemp, `${JSON.stringify({ brief: rawText }, null, 2)}\n`, 'utf8')
+    await writeFile(
+      pagesTemp,
+      `${JSON.stringify({ pageCount: inspection.pageCount, files }, null, 2)}\n`,
+      'utf8',
+    )
     await rename(briefTemp, path.join(workspace.outDir, 'brief.json'))
-    await rename(plansTemp, path.join(workspace.outDir, 'floor-plans.json'))
+    await rename(pagesTemp, path.join(workspace.outDir, 'pdf-pages.json'))
 
     return {
       ok: true,
       operation: 'finalize',
+      pageCount: inspection.pageCount,
       artifacts,
       manifests: [
         path.posix.join(workspace.containerOutDir, 'brief.json'),
-        path.posix.join(workspace.containerOutDir, 'floor-plans.json'),
+        path.posix.join(workspace.containerOutDir, 'pdf-pages.json'),
       ],
     }
   } catch (error) {
@@ -1003,9 +611,7 @@ async function finalizePdf(
       message:
         error instanceof PdfRuntimeUnavailableError
           ? 'The configured PDF processing runtime is unavailable.'
-          : error instanceof PdfManifestValidationError
-            ? error.message
-            : 'Validated PDF artifacts could not be finalized.',
+          : 'Validated PDF artifacts could not be finalized.',
       fileName,
       pageCount,
     }
@@ -1019,10 +625,10 @@ export function createProcessPdfTool(runtime: PdfToolRuntime = defaultRuntime())
     name: PDF_TOOL_ID,
     displayName: 'Property documents — process PDF',
     description:
-      'Inspect the one PDF staged for the active property-document run, then atomically validate and finalize schema-bound manifests plus selected plan PNGs. Paths, session, scope, commands, DPI, output names, and artifact bytes are server-owned.',
+      'Extract exact raw PDF text and render every page as deterministic PNG artifacts. Session, scope, commands, DPI, output names, and artifact bytes are server-owned.',
     tags: ['read', 'property-documents', 'pdf'],
     isMutation: false,
-    maxCallsPerTurn: 3,
+    maxCallsPerTurn: 2,
     requiredFeatures: ['agent_orchestrator.agents.run'],
     inputSchema: processPdfInputSchema,
     async handler(rawInput, context) {
@@ -1038,11 +644,7 @@ export function createProcessPdfTool(runtime: PdfToolRuntime = defaultRuntime())
         if (!result.ok) await writeProcessingError(workspace, result)
         return result
       }
-      return finalizePdf(runtime, workspace, inputPath, {
-        operation: 'finalize',
-        brief: input.brief!,
-        floorPlans: input.floorPlans!,
-      })
+      return finalizePdf(runtime, workspace, inputPath)
     },
   })
 }

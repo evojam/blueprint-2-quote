@@ -1,15 +1,18 @@
+import { createHash } from 'node:crypto'
 import { beforeEach, describe, expect, it, jest } from '@jest/globals'
 
-const getArtifactBytes = jest.fn<(...args: any[]) => Promise<Buffer | null>>()
+const getArtifactBytes = jest.fn<
+  (container: unknown, scope: unknown, storageKey: string) => Promise<Buffer | null>
+>()
 
-// The agent id is a one-line constant, but importing it for real drags the whole
-// ai-assistant LLM bootstrap (ESM) into a CommonJS test run. Production code keeps
-// the single source of the id; the test stubs the module.
+jest.mock('@/modules/property_documents/ai-tools', () => ({
+  PDF_AGENT_ID: 'property_documents.pdf_intake',
+}))
 jest.mock('@/modules/property_documents/ai-agents', () => ({
   CATALOG_MATCHER_AGENT_ID: 'property_documents.catalog_matcher',
 }))
 jest.mock('@open-mercato/enterprise/modules/agent_orchestrator/lib/runtime/artifactFileStore', () => ({
-  getArtifactBytes: (...args: any[]) => getArtifactBytes(...args),
+  getArtifactBytes: (...args: [unknown, unknown, string]) => getArtifactBytes(...args),
 }))
 jest.mock('@open-mercato/enterprise/modules/agent_orchestrator/data/entities', () => ({
   AgentRun: class AgentRun {},
@@ -19,7 +22,11 @@ jest.mock('@open-mercato/shared/lib/commands', () => ({
   registerCommand: jest.fn(),
 }))
 
-import { analyzePlansCommand, matchRequirementsCommand } from '../commands/analysis'
+import {
+  analyzePlansCommand,
+  loadPdfIntakeArtifactSet,
+  matchRequirementsCommand,
+} from '../commands/analysis'
 
 const INPUT = {
   tenantId: '11111111-1111-4111-8111-111111111111',
@@ -28,182 +35,255 @@ const INPUT = {
   workflowInstanceId: '44444444-4444-4444-8444-444444444444',
   stepId: 'measure_plans',
 }
+const RUN_ID = '55555555-5555-4555-8555-555555555555'
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
-type Artifact = { id: string; fileName: string; storageKey: string }
+type Artifact = {
+  id: string
+  tenantId: string
+  organizationId: string
+  runId: string
+  fileName: string
+  mimeType: string
+  fileSize: number
+  sha256: string
+  storageKey: string
+  deletedAt: null
+}
 
-function buildCtx(options: {
+type Fixture = {
   artifacts: Artifact[]
-  manifests: Record<string, unknown>
-  agentRun?: (agentId: string, input: unknown) => Promise<unknown>
-  promote?: () => Promise<{ attachmentId: string }>
-}) {
-  const agentCalls: Array<{ agentId: string; input: any }> = []
-  const promoted: string[] = []
+  bytesByFileName: Partial<Record<string, Buffer>>
+  run: {
+    id: string
+    tenantId: string
+    organizationId: string
+    agentId: string
+    workflowInstanceId: string
+    status: string
+    resultKind: string
+    output: {
+      kind: string
+      artifacts: Array<{ fileName: string; mimeType: string }>
+      summary: string
+    }
+    deletedAt: null
+  }
+}
 
+function sha256(bytes: Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex')
+}
+
+function artifact(fileName: string, bytes: Buffer): Artifact {
+  return {
+    id: `artifact-${fileName}`,
+    tenantId: INPUT.tenantId,
+    organizationId: INPUT.organizationId,
+    runId: RUN_ID,
+    fileName,
+    mimeType: fileName.endsWith('.png') ? 'image/png' : 'application/json',
+    fileSize: bytes.length,
+    sha256: sha256(bytes),
+    storageKey: `storage/${fileName}`,
+    deletedAt: null,
+  }
+}
+
+function makeFixture(): Fixture {
+  const bytesByFileName: Partial<Record<string, Buffer>> = {
+    'brief.json': Buffer.from(`${JSON.stringify({ brief: 'Exact raw text\f' })}\n`),
+    'pdf-pages.json': Buffer.from(
+      `${JSON.stringify({
+        pageCount: 2,
+        files: ['pdf-page-0001.png', 'pdf-page-0002.png'],
+      })}\n`,
+    ),
+    'pdf-page-0001.png': PNG,
+    'pdf-page-0002.png': PNG,
+  }
+  const artifacts = Object.entries(bytesByFileName).map(([fileName, bytes]) => {
+    if (!bytes) throw new Error(`missing fixture bytes for ${fileName}`)
+    return artifact(fileName, bytes)
+  })
+  const run = {
+    id: RUN_ID,
+    tenantId: INPUT.tenantId,
+    organizationId: INPUT.organizationId,
+    agentId: 'property_documents.pdf_intake',
+    workflowInstanceId: INPUT.workflowInstanceId,
+    status: 'ok',
+    resultKind: 'artifact',
+    output: {
+      kind: 'artifact',
+      artifacts: [
+        { fileName: 'brief.json', mimeType: 'application/json' },
+        { fileName: 'pdf-pages.json', mimeType: 'application/json' },
+      ],
+      summary: 'Extracted the raw PDF text and rendered every page.',
+    },
+    deletedAt: null,
+  }
+  return { artifacts, bytesByFileName, run }
+}
+
+function buildCtx(fixture: Fixture = makeFixture()) {
+  let artifactWhere: Record<string, unknown> | null = null
   const em = {
     fork: () => em,
-    findOne: async (_entity: unknown, where: any) => {
-      if ('agentId' in where) return { id: 'run-1' }
-      const artifact = options.artifacts.find((entry) => entry.fileName === where.fileName)
-      return artifact ?? null
+    findOne: async (_entity: unknown, where: Record<string, unknown>) =>
+      'agentId' in where ? fixture.run : null,
+    find: async (_entity: unknown, where: Record<string, unknown>) => {
+      artifactWhere = where
+      return fixture.artifacts
     },
-    find: async () => options.artifacts,
   }
-
   const container = {
     resolve: (name: string) => {
       if (name === 'em') return em
-      if (name === 'agentRuntime') {
-        return {
-          run: async (agentId: string, input: unknown) => {
-            agentCalls.push({ agentId, input })
-            return options.agentRun ? options.agentRun(agentId, input) : { kind: 'research', data: {} }
-          },
-        }
-      }
-      if (name === 'commandBus') {
-        return {
-          // The real bus takes `{ input, ctx }` and answers `{ result, logEntry }`;
-          // mocking the bare-payload shape would hide a caller that got it wrong.
-          execute: async (id: string, callOptions: any) => {
-            if (id !== 'agent_orchestrator.artifact.promote') throw new Error(`unexpected command ${id}`)
-            const payload = callOptions.input
-            promoted.push(payload.fileName)
-            const result = options.promote ? options.promote() : { attachmentId: `att-${payload.fileName}` }
-            return { result, logEntry: null }
-          },
-        }
-      }
       throw new Error(`unexpected resolve ${name}`)
     },
   }
-
-  getArtifactBytes.mockImplementation(async (_container: any, _scope: any, storageKey: string) => {
-    const artifact = options.artifacts.find((entry) => entry.storageKey === storageKey)
-    if (!artifact) return null
-    const manifest = options.manifests[artifact.fileName]
-    return manifest === undefined ? null : Buffer.from(JSON.stringify(manifest), 'utf8')
+  getArtifactBytes.mockImplementation(async (_container, _scope, storageKey) => {
+    const row = fixture.artifacts.find((entry) => entry.storageKey === storageKey)
+    return row ? fixture.bytesByFileName[row.fileName] ?? null : null
   })
-
-  return { ctx: { container, auth: { sub: 'user-1' } } as never, agentCalls, promoted }
+  return {
+    ctx: {
+      container,
+      auth: {
+        sub: 'user-1',
+        tenantId: INPUT.tenantId,
+        orgId: INPUT.organizationId,
+      },
+      selectedOrganizationId: INPUT.organizationId,
+    } as never,
+    em: em as never,
+    get artifactWhere() {
+      return artifactWhere
+    },
+  }
 }
 
-const PLAN_ARTIFACTS: Artifact[] = [
-  { id: 'a-manifest', fileName: 'floor-plans.json', storageKey: 'k-manifest' },
-  { id: 'a-1', fileName: 'plan-1.png', storageKey: 'k1' },
-  { id: 'a-2', fileName: 'plan-2.png', storageKey: 'k2' },
-  { id: 'a-3', fileName: 'plan-3.png', storageKey: 'k3' },
-]
-
-const THREE_PLANS = {
-  'floor-plans.json': {
-    plans: [
-      { sourcePage: 2, title: 'Architectural', artifactPath: 'out/plan-1.png' },
-      { sourcePage: 3, title: 'Electrical', artifactPath: 'out/plan-2.png' },
-      { sourcePage: 4, title: 'Plumbing', artifactPath: 'out/plan-3.png' },
-    ],
-  },
+async function load(fixture: Fixture = makeFixture()) {
+  const harness = buildCtx(fixture)
+  const result = await loadPdfIntakeArtifactSet(harness.em, harness.ctx, INPUT)
+  return { ...harness, result }
 }
 
-describe('rfq_intake.plans.analyze', () => {
+describe('loadPdfIntakeArtifactSet', () => {
   beforeEach(() => {
     getArtifactBytes.mockReset()
   })
 
-  it('promotes and measures every plan, not just the first', async () => {
-    const { ctx, agentCalls, promoted } = buildCtx({ artifacts: PLAN_ARTIFACTS, manifests: THREE_PLANS })
+  it('returns exact raw brief text and ordered page artifact identities after scoped validation', async () => {
+    const loaded = await load()
 
-    const result = await analyzePlansCommand.execute(INPUT, ctx)
-
-    expect(result).toMatchObject({ analysed: 3, failed: 0 })
-    expect(promoted).toEqual(['plan-1.png', 'plan-2.png', 'plan-3.png'])
-    expect(agentCalls).toHaveLength(3)
-    expect(agentCalls[0].agentId).toBe('property_documents.room_dimensions')
-    // room_dimensions accepts exactly one image, staged under a stable name.
-    expect(agentCalls[0].input.__files.attachments).toEqual([
-      { attachmentId: 'att-plan-1.png', as: 'floor-plan.png' },
-    ])
+    expect(loaded.result).toEqual({
+      runId: RUN_ID,
+      brief: 'Exact raw text\f',
+      pages: [
+        {
+          sourcePage: 1,
+          artifactId: 'artifact-pdf-page-0001.png',
+          fileName: 'pdf-page-0001.png',
+        },
+        {
+          sourcePage: 2,
+          artifactId: 'artifact-pdf-page-0002.png',
+          fileName: 'pdf-page-0002.png',
+        },
+      ],
+    })
+    expect(loaded.artifactWhere).toEqual({
+      tenantId: INPUT.tenantId,
+      organizationId: INPUT.organizationId,
+      runId: RUN_ID,
+      deletedAt: null,
+    })
   })
 
-  it('keeps the other plans when one fails', async () => {
-    const { ctx, agentCalls } = buildCtx({
-      artifacts: PLAN_ARTIFACTS,
-      manifests: THREE_PLANS,
-      agentRun: async (_agentId, input: any) => {
-        if (input.__files.attachments[0].attachmentId === 'att-plan-2.png') throw new Error('vision failed')
-        return { kind: 'research', data: {} }
-      },
-    })
-
-    const result = await analyzePlansCommand.execute(INPUT, ctx)
-
-    expect(result).toMatchObject({ analysed: 2, failed: 1 })
-    expect(agentCalls).toHaveLength(3)
+  it('rejects a missing captured artifact', async () => {
+    const fixture = makeFixture()
+    fixture.artifacts.pop()
+    await expect(load(fixture)).rejects.toThrow('artifact set mismatch')
   })
 
-  it('is a no-op when the brief carried no plans', async () => {
-    const { ctx, agentCalls } = buildCtx({
-      artifacts: [{ id: 'a-manifest', fileName: 'floor-plans.json', storageKey: 'k-manifest' }],
-      manifests: { 'floor-plans.json': { plans: [] } },
-    })
+  it('rejects an extra captured artifact', async () => {
+    const fixture = makeFixture()
+    const bytes = Buffer.from('{}')
+    fixture.bytesByFileName['unexpected.json'] = bytes
+    fixture.artifacts.push(artifact('unexpected.json', bytes))
+    await expect(load(fixture)).rejects.toThrow('artifact set mismatch')
+  })
 
-    const result = await analyzePlansCommand.execute(INPUT, ctx)
+  it('rejects unreadable captured bytes', async () => {
+    const fixture = makeFixture()
+    delete fixture.bytesByFileName['pdf-page-0002.png']
+    await expect(load(fixture)).rejects.toThrow('unreadable artifact')
+  })
 
-    expect(result).toEqual({ analysed: 0, failed: 0, rooms: [] })
-    expect(agentCalls).toHaveLength(0)
+  it('rejects mistyped captured metadata', async () => {
+    const fixture = makeFixture()
+    fixture.artifacts.find((row) => row.fileName === 'pdf-page-0001.png')!.mimeType =
+      'application/octet-stream'
+    await expect(load(fixture)).rejects.toThrow('invalid artifact metadata')
+  })
+
+  it('rejects a malformed or non-contiguous page inventory', async () => {
+    const fixture = makeFixture()
+    const bytes = Buffer.from(
+      JSON.stringify({ pageCount: 2, files: ['pdf-page-0001.png', 'pdf-page-0003.png'] }),
+    )
+    fixture.bytesByFileName['pdf-pages.json'] = bytes
+    Object.assign(
+      fixture.artifacts.find((row) => row.fileName === 'pdf-pages.json')!,
+      artifact('pdf-pages.json', bytes),
+    )
+    await expect(load(fixture)).rejects.toThrow('invalid pdf-pages.json')
+  })
+
+  it('rejects bytes that do not have a PNG signature', async () => {
+    const fixture = makeFixture()
+    const bytes = Buffer.from('not a png')
+    fixture.bytesByFileName['pdf-page-0001.png'] = bytes
+    Object.assign(
+      fixture.artifacts.find((row) => row.fileName === 'pdf-page-0001.png')!,
+      artifact('pdf-page-0001.png', bytes),
+    )
+    await expect(load(fixture)).rejects.toThrow('invalid PNG artifact')
+  })
+
+  it('rejects a foreign or run-mismatched row even if persistence returns it', async () => {
+    const fixture = makeFixture()
+    fixture.artifacts[0]!.runId = '66666666-6666-4666-8666-666666666666'
+    await expect(load(fixture)).rejects.toThrow('artifact scope mismatch')
+  })
+
+  it('rejects an AgentResult that references anything except the two control files', async () => {
+    const fixture = makeFixture()
+    fixture.run.output.artifacts[1] = {
+      fileName: 'pdf-page-0001.png',
+      mimeType: 'image/png',
+    }
+    await expect(load(fixture)).rejects.toThrow('invalid AgentResult')
   })
 })
 
-describe('rfq_intake.requirements.match', () => {
+describe('deferred RFQ intake consumers', () => {
   beforeEach(() => {
     getArtifactBytes.mockReset()
   })
 
-  const BRIEF_ARTIFACTS: Artifact[] = [{ id: 'a-brief', fileName: 'brief.json', storageKey: 'kb' }]
-  const FIVE_REQUIREMENTS = {
-    'brief.json': {
-      requirements: [
-        { category: 'walls', text: 'malowanie ścian w salonie' },
-        { category: 'floors', text: 'układanie paneli' },
-        { category: 'electrics', text: 'wymiana instalacji elektrycznej' },
-        { category: 'other', text: 'wywóz gruzu' },
-        { category: 'other', text: 'coś, czego katalog nie zna' },
-      ],
-    },
-  }
+  it.each([
+    ['rfq_intake.plans.analyze', analyzePlansCommand],
+    ['rfq_intake.requirements.match', matchRequirementsCommand],
+  ])('%s validates the captured set and stops before semantic work', async (_id, command) => {
+    const { ctx } = buildCtx()
 
-  it('calls the matcher once per requirement and reports the unmatched one', async () => {
-    const { ctx, agentCalls } = buildCtx({
-      artifacts: BRIEF_ARTIFACTS,
-      manifests: FIVE_REQUIREMENTS,
-      agentRun: async (_agentId, input: any) =>
-        input.text.startsWith('coś')
-          ? { kind: 'research', data: { matches: [], unmatchedTerms: [input.text] } }
-          : { kind: 'research', data: { matches: [{ catalogProductId: 'p-1' }] } },
-    })
-
-    const result = await matchRequirementsCommand.execute(INPUT, ctx)
-
-    // Every service has to reach the quote: five requirements, five calls.
-    expect(agentCalls).toHaveLength(5)
-    expect(agentCalls.every((call) => call.agentId === 'property_documents.catalog_matcher')).toBe(true)
-    expect(result.matched).toBe(4)
-    expect(result.unmatched).toEqual(['coś, czego katalog nie zna'])
-  })
-
-  it('reports a failed requirement instead of dropping it', async () => {
-    const { ctx } = buildCtx({
-      artifacts: BRIEF_ARTIFACTS,
-      manifests: FIVE_REQUIREMENTS,
-      agentRun: async (_agentId, input: any) => {
-        if (input.text === 'wywóz gruzu') throw new Error('catalog search unavailable')
-        return { kind: 'research', data: { matches: [{ catalogProductId: 'p-1' }] } }
-      },
-    })
-
-    const result = await matchRequirementsCommand.execute(INPUT, ctx)
-
-    expect(result.failed).toBe(1)
-    expect(result.unmatched).toContain('wywóz gruzu')
+    await expect(command.execute(INPUT, ctx)).rejects.toThrow(
+      '[internal] PDF_INTAKE_DOWNSTREAM_DEFERRED',
+    )
+    expect(getArtifactBytes).toHaveBeenCalledTimes(4)
   })
 })
