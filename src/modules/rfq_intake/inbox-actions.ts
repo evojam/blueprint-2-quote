@@ -45,13 +45,20 @@ const RFQ_DEAL_SOURCE = 'inbox_ops:rfq'
  * (`executionEngine.ts:397` uses `definition.payloadSchema`), so relaxing it is a
  * local decision.
  *
+ * `customerName` is relaxed for the same reason: a thread whose sender signs off with
+ * nothing but an address ("marek@evojam.com") has no personal name to extract, and the
+ * prompt rule below forbids inventing one. Requiring it failed the whole action with
+ * "customerName: expected string, received undefined" instead of opening the case.
+ * Both consumers already cope: `buildDealTitle` falls back to the e-mail, and
+ * `ensureContact` derives a person name from the address when the hint is missing.
+ *
  * HACK(hackathon): the action-EDIT route still validates against the installed
  * `orderPayloadSchema` (`api/proposals/[id]/actions/[actionId]/route.ts:60`), so
  * hand-editing an RFQ action in the UI fails until line items and a currency are
  * filled in. Extraction and execution are unaffected.
  */
 const rfqPayloadSchema = orderPayloadSchema
-  .partial({ currencyCode: true, lineItems: true } as never)
+  .partial({ currencyCode: true, lineItems: true, customerName: true } as never)
   .extend({
     customerPhone: z.string().trim().max(100).optional(),
     companyName: z.string().trim().max(300).optional(),
@@ -85,6 +92,89 @@ function buildDealDescription(payload: RfqPayload): string | undefined {
   if (lines.length > 0) parts.push(lines.map((line) => `- ${line}`).join('\n'))
   const text = parts.join('\n\n').trim()
   return text.length > 0 ? text.slice(0, 4000) : undefined
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function asText(value: unknown): string | null {
+  if (typeof value === 'string') return firstNonEmpty(value)
+  if (typeof value === 'number') return String(value)
+  return null
+}
+
+/**
+ * Maps what the model actually emits onto the schema.
+ *
+ * Observed on the demo environment (proposals 9cc9514b / fa3ec747, sonnet via litellm):
+ * the model answered with a shape of its own invention —
+ * `{ customer: { name, email }, scope: [...], area_m2, floors, location,
+ * ceiling_height_cm }` — so `customerName` arrived undefined and the whole action
+ * failed validation, while every fact the enquiry carried was silently dropped.
+ *
+ * Two reasons it drifted, both now addressed: the definition inherited no
+ * `normalizePayload` when it took the type over from `sales` (the installed one has
+ * `normalizeOrderPayload`), and its `promptSchema` was the `(shared with create_order)`
+ * placeholder, which `extractionPrompt.ts:27` filters OUT of the prompt — so the model
+ * was shown the quote-DOCUMENT schema and left to guess how an RFQ fits it.
+ *
+ * This is the belt to the prompt's braces: a better prompt reduces the drift, it does
+ * not remove it. Nothing here invents data — it only moves what the model did extract
+ * to where the schema expects it, and folds the rest into `notes` so the case body
+ * carries the scope and the scale instead of losing them.
+ */
+async function normalizeRfqPayload(
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const customer = asRecord(payload.customer) ?? {}
+
+  payload.customerName ??= asText(customer.name)
+    ?? asText(payload.customerFullName)
+    ?? asText(payload.contactName)
+    ?? undefined
+  payload.customerEmail ??= asText(customer.email) ?? asText(payload.email) ?? undefined
+  payload.customerPhone ??= asText(customer.phone) ?? asText(payload.phone) ?? undefined
+  payload.companyName ??= asText(customer.company) ?? asText(payload.company) ?? undefined
+
+  // The enquiry's substance, in the model's own words. `buildDealDescription` reads
+  // `notes`, so without this the costing clerk opens a case with an empty body.
+  //
+  // HACK(hackathon): the labels are hardcoded Polish. `notes` is DATA written once into
+  // the deal body, not a rendered string, so there is no request locale to translate
+  // against — a key would still have to be resolved to one language at write time.
+  // What breaks: a non-Polish operator reads Polish labels around correct values.
+  const facts: string[] = []
+  const scope = Array.isArray(payload.scope)
+    ? payload.scope.map(asText).filter((entry): entry is string => Boolean(entry))
+    : []
+  if (scope.length > 0) facts.push(`Zakres: ${scope.join(', ')}`)
+  const location = asText(payload.location)
+  if (location) facts.push(`Lokalizacja: ${location}`)
+  const area = asText(payload.area_m2) ?? asText(payload.areaM2)
+  if (area) facts.push(`Powierzchnia: ${area} m2`)
+  const floors = asText(payload.floors)
+  if (floors) facts.push(`Kondygnacje: ${floors}`)
+  const ceiling = asText(payload.ceiling_height_cm) ?? asText(payload.ceilingHeightCm)
+  if (ceiling) facts.push(`Wysokość pomieszczeń: ${ceiling} cm`)
+
+  if (facts.length > 0) {
+    const existing = asText(payload.notes)
+    payload.notes = [existing, facts.join('\n')].filter(Boolean).join('\n\n')
+  }
+
+  // Keys the schema does not know. `orderPayloadSchema` is not strict, so leaving them
+  // would be harmless — dropping them keeps the stored payload readable instead.
+  for (const key of [
+    'customer', 'scope', 'location', 'area_m2', 'areaM2', 'floors',
+    'ceiling_height_cm', 'ceilingHeightCm', 'email', 'phone', 'company',
+  ]) {
+    delete payload[key]
+  }
+
+  return payload
 }
 
 async function executeCreateRfqAction(
@@ -152,11 +242,18 @@ export const inboxActions: InboxActionDefinition[] = [
     requiredFeature: 'customers.deals.manage',
     payloadSchema: rfqPayloadSchema,
     label: 'Save RFQ and start the AI analysis',
-    promptSchema: '(shared with create_order)',
+    // NOT the inherited `(shared with create_order)` placeholder: `extractionPrompt.ts:27`
+    // filters that exact string out, so create_quote reached the model with no field list
+    // of its own and it answered with an invented shape (`customer: {name}`, `area_m2`,
+    // `scope`). Spelling the payload out here is what stops the drift at the source;
+    // `normalizeRfqPayload` catches what still slips through.
+    promptSchema: `create_quote payload (a property or renovation RFQ — a CASE, not a priced document):
+{ customerName: string (the sender's full personal name), customerEmail?: string, customerPhone?: string, companyName?: string, customerEntityId?: uuid, currencyCode?: string (3-letter ISO), lineItems?: [{ productName: string (REQUIRED), quantity: string, unitPrice?: string, kind?: "product"|"service", description?: string }], notes?: string }
+Use THESE key names exactly. Do not nest the contact under a "customer" object, and do not invent keys such as "scope", "area_m2", "floors" or "location" — the enquiry's scope, area, storey count, ceiling heights and location all belong in "notes" as plain text.`,
     promptRules: [
       'A property or renovation enquiry that arrives with a PDF brief, floor plan, or drawing is a create_quote action, even when no prices are mentioned: accepting it opens the case and starts the document analysis.',
       'For create_quote: always carry customerEmail when the thread reveals it, plus customerPhone and companyName when the signature or body gives them. They are used to guarantee the CRM contact before the case is opened.',
-      'For create_quote: customerName must be the sender\'s full personal name as written in the signature or the From header (both given and family name, e.g. "Marek Grochala"), not a greeting, not a role, and not the company. Fall back to the company name only when the thread names no person at all.',
+      'For create_quote: customerName must be the sender\'s full personal name as written in the signature or the From header (both given and family name, e.g. "Marek Grochala"), not a greeting, not a role, and not the company. Fall back to the company name only when the thread names no person at all, and omit the field entirely when the thread reveals no name — never invent one from the e-mail address.',
       'For a create_quote that is a property or renovation enquiry: do not invent prices or line items that the thread does not state. An enquiry whose detail lives in an attached PDF may carry no line items at all.',
       // HACK(hackathon): currencyCode is unused by this action — the RFQ case carries no
       // money. It is emitted only to silence the installed `no_currency_resolved`
@@ -167,6 +264,7 @@ export const inboxActions: InboxActionDefinition[] = [
       // warning for quotes without line items.
       'For create_quote: set currencyCode to "PLN" unless the thread names a different currency.',
     ],
+    normalizePayload: normalizeRfqPayload,
     execute: executeCreateRfqAction,
   },
 ]
