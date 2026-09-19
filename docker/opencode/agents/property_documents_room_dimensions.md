@@ -1,5 +1,5 @@
 ---
-description: "Group visible floor-plan dimensions by enclosed room and return one record per room."
+description: "Deprecated: use property_documents.room_measurements for new integrations"
 mode: primary
 tools:
   "*": false

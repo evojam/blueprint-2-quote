@@ -1,7 +1,7 @@
 ---
 id: property_documents.room_dimensions
 label: Room dimensions from image
-description: Group visible floor-plan dimensions by enclosed room and return one record per room.
+description: "Deprecated: use property_documents.room_measurements for new integrations"
 maxSteps: 8
 tools:
   - property_documents.extract_room_dimensions
