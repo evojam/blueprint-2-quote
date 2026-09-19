@@ -126,7 +126,7 @@ const rfqAnalysis = defineWorkflow({
               tenantId: '{{workflow.tenantId}}',
               organizationId: '{{workflow.organizationId}}',
               workflowInstanceId: '{{workflow.instanceId}}',
-              dealId: '{{workflow.dealId}}',
+              dealId: '{{context.dealId}}',
               stepId: 'measure_rooms',
             },
           },

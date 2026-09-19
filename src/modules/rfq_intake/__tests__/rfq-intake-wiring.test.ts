@@ -203,7 +203,7 @@ describe('rfq_intake analysis workflow', () => {
           tenantId: '{{workflow.tenantId}}',
           organizationId: '{{workflow.organizationId}}',
           workflowInstanceId: '{{workflow.instanceId}}',
-          dealId: '{{workflow.dealId}}',
+          dealId: '{{context.dealId}}',
           stepId: 'measure_rooms',
         },
       },
