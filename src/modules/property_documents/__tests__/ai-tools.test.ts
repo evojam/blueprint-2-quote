@@ -97,21 +97,20 @@ describe('property_documents.process_pdf', () => {
     })
   })
 
-  it('generates an analysis-scoped read profile with the two-control-file outcome', async () => {
+  it('generates a tool-only PDF intake profile with the two-control-file outcome', async () => {
     const generated = await readFile(
       path.resolve('docker/opencode/agents/property_documents_pdf_intake.md'),
       'utf8',
     )
 
-    expect(generated).toContain('  read: true')
+    expect(generated).not.toContain('  read: true')
+    expect(generated).toContain('  read: deny')
     expect(generated).toContain('  write: deny')
     expect(generated).toContain('  edit: deny')
     expect(generated).toContain('  bash: deny')
     expect(generated).toContain('  "*": false')
     expect(generated.split('\n')).not.toContain('  "*": deny')
-    expect(generated).toContain('    "*": deny')
-    expect(generated).toContain('    "/home/opencode/work/*/analysis/**": allow')
-    expect(generated).toContain('    "home/opencode/work/*/analysis/**": allow')
+    expect(generated).not.toContain('/analysis/**')
     expect(generated).not.toContain('/in/**')
     expect(generated).not.toContain('  write: true')
     expect(generated).not.toContain('  edit: true')

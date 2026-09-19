@@ -57,7 +57,9 @@ const rfqAnalysis = defineWorkflow({
           async: false,
           config: {
             agentId: PDF_AGENT_ID,
-            input: {},
+            input: {
+              __files: '{{context.__files}}',
+            },
             onResult: { autoApproveThreshold: 0 },
           },
         },

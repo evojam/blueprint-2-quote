@@ -116,12 +116,13 @@ Your result MUST match this JSON Schema (the \`data\` object). Pass it as the \`
       path.join(agentsDir, 'property_documents_pdf_intake.md'),
       'utf8',
     )
-    expect(hardenedIntake).toContain('  read: true')
+    expect(hardenedIntake).not.toContain('  read: true')
+    expect(hardenedIntake).toContain('  read: deny')
     expect(hardenedIntake).toContain('  write: deny')
     expect(hardenedIntake).toContain('  edit: deny')
     expect(hardenedIntake).toContain('  bash: deny')
-    expect(hardenedIntake).toContain('    "/home/opencode/work/*/analysis/**": allow')
-    expect(hardenedIntake).toContain('    "home/opencode/work/*/analysis/**": allow')
+    expect(hardenedIntake).not.toContain('/analysis/**')
+    expect(hardenedIntake).not.toContain('/in/**')
     expect(hardenedIntake).not.toContain('open-mercato_agent_orchestrator_load_skill')
     expect(hardenedIntake).not.toContain('open-mercato_agent_orchestrator_run_skill_script')
     expect(hardenedIntake).toContain('"kind": "artifact"')
