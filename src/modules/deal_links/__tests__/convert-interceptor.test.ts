@@ -105,3 +105,66 @@ describe('deal_links.link-converted-order', () => {
     expect(persisted).toHaveLength(0)
   })
 })
+
+// Mirrors the payload `sales.quotes.convert_to_order`'s own `buildLog` writes
+// (`sales/commands/documents.ts` ~line 6757): `payload.undo = { quote: before,
+// order: after }`, persisted as `ActionLog.commandPayload` and read back via
+// `extractUndoPayload`.
+function buildUndoLogEntry(orderId: string | null) {
+  return {
+    commandPayload: {
+      undo: {
+        quote: { quote: { id: QUOTE, dealId: DEAL } },
+        order: orderId ? { order: { id: orderId } } : null,
+      },
+    },
+  }
+}
+
+// Factory, not a shared const: `afterUndo` mutates the found row in place
+// (`link.deletedAt = new Date()`) before persisting it, and `findOne` in the
+// fake `em` returns rows by reference — a shared object would leak the
+// mutation from one test into the next.
+function buildOrderLink() {
+  return {
+    id: 'link-2',
+    dealId: DEAL,
+    documentId: ORDER,
+    documentKind: 'order',
+    tenantId: TENANT,
+    organizationId: ORG,
+  }
+}
+
+describe('deal_links.link-converted-order — afterUndo', () => {
+  it('soft-deletes the order link when the conversion is undone', async () => {
+    const { ctx, persisted } = buildCtx([sourceLink, buildOrderLink()])
+    const undoContext = { input: { quoteId: QUOTE }, logEntry: buildUndoLogEntry(ORDER), undoToken: 'tok-1' }
+
+    await interceptor.afterUndo?.(undoContext as never, ctx)
+
+    expect(persisted).toHaveLength(1)
+    expect(persisted[0]).toMatchObject({ documentId: ORDER, documentKind: 'order' })
+    expect((persisted[0] as { deletedAt?: Date }).deletedAt).toBeInstanceOf(Date)
+  })
+
+  it('does nothing when no matching order link exists', async () => {
+    const { ctx, persisted } = buildCtx([sourceLink])
+    const undoContext = { input: { quoteId: QUOTE }, logEntry: buildUndoLogEntry(ORDER), undoToken: 'tok-2' }
+
+    await interceptor.afterUndo?.(undoContext as never, ctx)
+
+    expect(persisted).toHaveLength(0)
+  })
+
+  it('writes nothing when the context carries no scope', async () => {
+    const { ctx, persisted } = buildCtx([sourceLink, buildOrderLink()])
+    ;(ctx as unknown as { auth: unknown }).auth = null
+    ;(ctx as unknown as { selectedOrganizationId: unknown }).selectedOrganizationId = null
+    const undoContext = { input: { quoteId: QUOTE }, logEntry: buildUndoLogEntry(ORDER), undoToken: 'tok-3' }
+
+    await interceptor.afterUndo?.(undoContext as never, ctx)
+
+    expect(persisted).toHaveLength(0)
+  })
+})

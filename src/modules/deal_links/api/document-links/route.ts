@@ -48,6 +48,14 @@ export const { metadata, GET, POST } = makeCrudRoute({
     entityId: DOCUMENT_LINK_ENTITY_ID,
     fields: () => ['id', 'deal_id', 'document_id', 'document_kind', 'created_at'],
     sortFieldMap: { created_at: 'created_at' },
+    // `makeCrudRoute` resolves sort from the RAW query params merged with the
+    // interceptor query, not from the validated Zod object
+    // (`shared/src/lib/crud/factory.ts` — `queryParams = { ...rawQueryParams, ... }`
+    // feeding `resolveSortParams`), so the Zod `default('created_at')` /
+    // `default('desc')` on `querySchema` above are never consulted when a real
+    // request omits `sortField`/`sortDir`. This `defaultSort` is what actually
+    // makes the list "newest first" as documented in `openApi` below.
+    defaultSort: { field: 'created_at', dir: 'desc' },
     buildFilters: async (q: Query) => {
       const filters: Record<string, unknown> = {}
       if (q.dealId) filters.deal_id = q.dealId
