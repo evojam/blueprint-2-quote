@@ -37,7 +37,7 @@ One command. The agent names the service and the basis; the command resolves the
 
 `docs/superpowers/plans/2026-09-19-rfq-sales-quote-drafts.md`, also on `main`, plans `rfq_intake.quote.create` and `rfq_intake.quote.compose` while citing that same spec, so on `main` the plan is ahead of the spec it names. **This spec supersedes that plan's quote-creation design.** The plan requires product-level price candidates with `productVariantId = null` (`:365`, `:393`); `catalog_seed` creates prices exclusively with a `variantId` (`src/modules/catalog_seed/cli.ts:268-277`) into `catalog_product_variant_prices`. `CatalogProductPrice` carries both a nullable `product` and a nullable `variant` relation, so product-level rows are *schematically* possible — but **not one exists in the seeded catalog**, so that lookup returns zero prices and every line is dropped. This spec resolves prices on the variant.
 
-**Reviewer note.** A longer, unmerged revision of the neighbouring spec exists on branch `feat/deal-document-links`; it declares `rfq_intake.quote.create` in a Commands table with the same product-level pricing assumption. Whoever merges that branch must reconcile it rather than land a second owner for the command.
+**Resolved.** A longer revision of the neighbouring spec appeared to live on branch `feat/deal-document-links`, declaring `rfq_intake.quote.create` with the same product-level pricing assumption. It was not a change that branch made: the branch was cut before `main` narrowed that spec and simply carried the older snapshot, so rebasing it onto `main` dropped the stale copy without a conflict. There is no second owner.
 
 ### Dependency on the room-measurements agent (PR #35)
 
@@ -313,7 +313,9 @@ Per-item failures drop the item with a bounded warning and let the rest proceed.
 
 **Second risk — the probe outliving its purpose.** Mitigated by the stated removal condition and the auto-approve setting being labelled test-only.
 
-**Deliberate non-goal.** Linking the quote to the deal through `deal_links.document_links.create` belongs to the slice that wires the workflow.
+**Deal link.** After the quote is created, the command calls `deal_links.document_links.create` with `{ dealId, documentId, documentKind: 'quote' }`, which is what makes the quote visible on the deal's detail page.
+
+The call is deliberately **post-commit**. That command writes through its own EntityManager and flushes immediately, so it does not join a caller's transaction: invoking it before the Sales write would leave a link row behind if the quote then failed, and the module exposes no delete path. A failure to link is reported as `deal_link_failed` rather than thrown — losing the tab is recoverable, losing the quote is not.
 
 ## 📋 Phasing
 

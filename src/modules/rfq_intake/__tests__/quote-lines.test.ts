@@ -36,6 +36,9 @@ const premiumVariant = '88888888-8888-4888-8888-888888888888'
 const companyEntityId = '99999999-9999-4999-8999-999999999999'
 
 let salesCalls: Array<{ id: string; input: any }>
+let linkCalls: Array<{ id: string; input: any }>
+/** Set to make the deal-link write fail, which must not cost the quote. */
+let linkThrows: boolean
 let companyLink: unknown
 let personLink: unknown
 
@@ -72,6 +75,11 @@ function makeCtx() {
         if (name === 'commandBus') {
           return {
             execute: async (id: string, options: any) => {
+              if (id === 'deal_links.document_links.create') {
+                if (linkThrows) throw new Error('link write failed')
+                linkCalls.push({ id, input: options.input })
+                return { result: { id: 'link-1' }, logEntry: null }
+              }
               salesCalls.push({ id, input: options.input })
               return { result: { quoteId: 'created-quote-id' }, logEntry: null }
             },
@@ -100,6 +108,8 @@ function input(items: unknown[]) {
 
 beforeEach(() => {
   salesCalls = []
+  linkCalls = []
+  linkThrows = false
   companyLink = null
   personLink = null
   loadQuotableProduct.mockReset()
@@ -342,5 +352,67 @@ describe('rfq_intake.quote.create line assembly', () => {
 
     expect(result.warnings).toEqual(['ceiling_height_missing:0'])
     expect(salesCalls).toHaveLength(0)
+  })
+
+  it('links the created quote to the deal, which is what puts it on the deal page', async () => {
+    loadQuotableProduct.mockResolvedValue(paint())
+    resolveQuantity.mockReturnValue(area(6))
+    resolveUnitPrice.mockResolvedValue(pln())
+
+    await createQuoteCommand.execute(
+      input([{ catalogProductId: paintId, basis: 'floor_area', roomIds: ['room-1'] }]),
+      makeCtx(),
+    )
+
+    expect(linkCalls).toHaveLength(1)
+    expect(linkCalls[0].input).toEqual({
+      dealId,
+      documentId: 'created-quote-id',
+      documentKind: 'quote',
+    })
+  })
+
+  it('links only after the quote exists, never before it', async () => {
+    // The link write does not join this command's transaction and cannot be undone,
+    // so ordering is the only thing preventing an orphan row.
+    loadQuotableProduct.mockResolvedValue(paint())
+    resolveQuantity.mockReturnValue(area(6))
+    resolveUnitPrice.mockResolvedValue(pln())
+
+    await createQuoteCommand.execute(
+      input([{ catalogProductId: paintId, basis: 'floor_area', roomIds: ['room-1'] }]),
+      makeCtx(),
+    )
+
+    expect(salesCalls).toHaveLength(1)
+    expect(linkCalls).toHaveLength(1)
+  })
+
+  it('creates no link when no quote was created', async () => {
+    loadQuotableProduct.mockResolvedValue({ ok: false, code: 'product_not_found' })
+
+    const result = await createQuoteCommand.execute(
+      input([{ catalogProductId: paintId, basis: 'count', count: 2 }]),
+      makeCtx(),
+    )
+
+    expect(result.quoteId).toBeNull()
+    expect(linkCalls).toHaveLength(0)
+  })
+
+  it('keeps the quote and reports the failure when the link cannot be written', async () => {
+    linkThrows = true
+    loadQuotableProduct.mockResolvedValue(paint())
+    resolveQuantity.mockReturnValue(area(6))
+    resolveUnitPrice.mockResolvedValue(pln())
+
+    const result = await createQuoteCommand.execute(
+      input([{ catalogProductId: paintId, basis: 'floor_area', roomIds: ['room-1'] }]),
+      makeCtx(),
+    )
+
+    // Losing the tab is recoverable; losing the quote is not.
+    expect(result.quoteId).toBe('created-quote-id')
+    expect(result.warnings).toContain('deal_link_failed')
   })
 })
