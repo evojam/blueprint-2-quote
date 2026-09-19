@@ -151,6 +151,7 @@ export const inboxActions: InboxActionDefinition[] = [
     promptRules: [
       'A property or renovation enquiry that arrives with a PDF brief, floor plan, or drawing is a create_quote action, even when no prices are mentioned: accepting it opens the case and starts the document analysis.',
       'For create_quote: always carry customerEmail when the thread reveals it, plus customerPhone and companyName when the signature or body gives them. They are used to guarantee the CRM contact before the case is opened.',
+      'For create_quote: customerName must be the sender\'s full personal name as written in the signature or the From header (both given and family name, e.g. "Marek Grochala"), not a greeting, not a role, and not the company. Fall back to the company name only when the thread names no person at all.',
       'For a create_quote that is a property or renovation enquiry: do not invent currencyCode, prices, or line items that the thread does not state. An enquiry whose detail lives in an attached PDF may carry no line items at all.',
     ],
     execute: executeCreateRfqAction,
