@@ -20,6 +20,11 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'dashboards', from: '@open-mercato/core' },
   { id: 'events', from: '@open-mercato/events' },
   { id: 'search', from: '@open-mercato/search' },
+  // Integration Marketplace. Owns `integrationCredentialsService` and the
+  // `integration_credentials` table, so it has to precede every provider that
+  // stores credentials — `storage_s3` below resolves that token to authenticate
+  // the S3 driver, and the agent artifact store fails closed without it.
+  { id: 'integrations', from: '@open-mercato/core' },
   { id: 'attachments', from: '@open-mercato/core' },
   { id: 'customers', from: '@open-mercato/core' },
   { id: 'messages', from: '@open-mercato/core' },
