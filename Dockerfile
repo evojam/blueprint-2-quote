@@ -15,9 +15,19 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
 ARG OM_ENABLE_ENTERPRISE_MODULES=true
 ARG OM_ENABLE_ENTERPRISE_MODULES_AGENTS=true
 ARG OM_ENABLE_STORAGE_S3=true
+
+# Both default to "demo is on" when unset, which is wrong for a deployed image:
+# `DEMO_MODE` unset locks the attachment-partition settings (UI and API alike), and
+# the root layout bakes `demoModeEnabled` into the prerendered tree during
+# `yarn build`. Pin them here so the image carries the deployed-environment answer
+# rather than the local-demo one; the task definition can still override.
+ARG DEMO_MODE=false
+ARG SELF_SERVICE_ONBOARDING_ENABLED=false
 ENV OM_ENABLE_ENTERPRISE_MODULES=${OM_ENABLE_ENTERPRISE_MODULES} \
     OM_ENABLE_ENTERPRISE_MODULES_AGENTS=${OM_ENABLE_ENTERPRISE_MODULES_AGENTS} \
-    OM_ENABLE_STORAGE_S3=${OM_ENABLE_STORAGE_S3}
+    OM_ENABLE_STORAGE_S3=${OM_ENABLE_STORAGE_S3} \
+    DEMO_MODE=${DEMO_MODE} \
+    SELF_SERVICE_ONBOARDING_ENABLED=${SELF_SERVICE_ONBOARDING_ENABLED}
 
 WORKDIR /app
 
@@ -93,6 +103,8 @@ ARG OPEN_MERCATO_DOCKER_REGISTRY_HOST=host.docker.internal
 ARG OM_ENABLE_ENTERPRISE_MODULES=true
 ARG OM_ENABLE_ENTERPRISE_MODULES_AGENTS=true
 ARG OM_ENABLE_STORAGE_S3=true
+ARG DEMO_MODE=false
+ARG SELF_SERVICE_ONBOARDING_ENABLED=false
 
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
@@ -102,6 +114,8 @@ ENV NODE_ENV=production \
     OM_ENABLE_ENTERPRISE_MODULES=${OM_ENABLE_ENTERPRISE_MODULES} \
     OM_ENABLE_ENTERPRISE_MODULES_AGENTS=${OM_ENABLE_ENTERPRISE_MODULES_AGENTS} \
     OM_ENABLE_STORAGE_S3=${OM_ENABLE_STORAGE_S3} \
+    DEMO_MODE=${DEMO_MODE} \
+    SELF_SERVICE_ONBOARDING_ENABLED=${SELF_SERVICE_ONBOARDING_ENABLED} \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Chromium backs the Documents PDF export (puppeteer-core); Poppler backs the
