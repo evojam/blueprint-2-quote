@@ -12,6 +12,15 @@ registerWorkflowSafeCommands([
     requiredFeatures: ['customers.deals.manage'],
     labelKey: 'rfq_intake.workflows.commands.requirements.match',
   },
+  {
+    // Declaring it here is what puts the command in the Agent Orchestrator's action
+    // vocabulary (`listWorkflowSafeCommands() ∪ activityTypes()`), so a proposed
+    // action can effect it. Without this entry the action comes back `skipped`, not
+    // failed — which is why the declaration has its own regression test.
+    commandId: 'rfq_intake.quote.create',
+    requiredFeatures: ['customers.deals.manage', 'sales.quotes.manage'],
+    labelKey: 'rfq_intake.workflows.commands.quote.create',
+  },
 ])
 
 /**
