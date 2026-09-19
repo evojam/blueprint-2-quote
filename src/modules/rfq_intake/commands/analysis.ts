@@ -11,12 +11,17 @@ import { getArtifactBytes } from '@open-mercato/enterprise/modules/agent_orchest
 import {
   CATALOG_MATCHER_AGENT_ID,
   catalogMatcherGroupedResultSchema,
+  parseCatalogMatcherGroupedResult,
 } from '@/modules/property_documents/ai-agents'
 import { PDF_AGENT_ID } from '@/modules/property_documents/ai-tools'
 
 const BRIEF_FILE = 'brief.json'
 const PAGE_INVENTORY_FILE = 'pdf-pages.json'
 const MAX_BRIEF_BYTES = 65_536
+const GROUPED_MATCHER_LIMITS = {
+  maxNeeds: 40,
+  limitPerNeed: 5,
+} as const
 
 const analysisInputSchema = z
   .object({
@@ -183,8 +188,8 @@ export async function loadPdfIntakeBrief(
   }
 
   const briefBytes = await readVerifiedArtifact(ctx, scope, briefArtifact)
-  if (briefBytes.length > MAX_BRIEF_BYTES) failIntake(`invalid ${BRIEF_FILE}`)
   const { brief } = parseJsonArtifact(briefBytes, briefSchema, BRIEF_FILE)
+  if (Buffer.byteLength(brief, 'utf8') > MAX_BRIEF_BYTES) failIntake(`invalid ${BRIEF_FILE}`)
   return { runId: run.id, brief }
 }
 
@@ -192,6 +197,7 @@ async function findSuccessfulGroupedMatcherRun(
   em: EntityManager,
   scope: { tenantId: string; organizationId: string },
   workflowInstanceId: string,
+  limits: { maxNeeds: number; limitPerNeed: number },
 ): Promise<GroupedMatcherResult | null> {
   const runs = await em.find(
     AgentRun,
@@ -219,7 +225,12 @@ async function findSuccessfulGroupedMatcherRun(
       continue
     }
     const parsed = catalogMatcherGroupedResultSchema.safeParse(run.output)
-    if (parsed.success) return parsed.data
+    if (!parsed.success) continue
+    try {
+      return parseCatalogMatcherGroupedResult(parsed.data, limits)
+    } catch {
+      continue
+    }
   }
   return null
 }
@@ -230,7 +241,12 @@ const matchRequirementsCommand: CommandHandler<AnalysisInput, GroupedMatcherResu
     const input = analysisInputSchema.parse(rawInput)
     const scope = trustedScope(input, ctx)
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const priorResult = await findSuccessfulGroupedMatcherRun(em, scope, input.workflowInstanceId)
+    const priorResult = await findSuccessfulGroupedMatcherRun(
+      em,
+      scope,
+      input.workflowInstanceId,
+      GROUPED_MATCHER_LIMITS,
+    )
     if (priorResult) return priorResult
 
     const { brief } = await loadPdfIntakeBrief(em, ctx, input)
@@ -242,8 +258,8 @@ const matchRequirementsCommand: CommandHandler<AnalysisInput, GroupedMatcherResu
       {
         mode: 'grouped',
         text: brief,
-        maxNeeds: 40,
-        limitPerNeed: 5,
+        maxNeeds: GROUPED_MATCHER_LIMITS.maxNeeds,
+        limitPerNeed: GROUPED_MATCHER_LIMITS.limitPerNeed,
       },
       {
         tenantId: scope.tenantId,
@@ -254,7 +270,7 @@ const matchRequirementsCommand: CommandHandler<AnalysisInput, GroupedMatcherResu
         invocationId: randomUUID(),
       },
     )
-    return catalogMatcherGroupedResultSchema.parse(result)
+    return parseCatalogMatcherGroupedResult(result, GROUPED_MATCHER_LIMITS)
   },
 }
 
