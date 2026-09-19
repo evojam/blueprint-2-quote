@@ -13,7 +13,8 @@ import {
   catalogMatcherGroupedResultSchema,
   parseCatalogMatcherGroupedResult,
 } from '@/modules/property_documents/ai-agents'
-import { PDF_AGENT_ID } from '@/modules/property_documents/ai-tools'
+import { PDF_AGENT_ID, ROOM_MEASUREMENTS_AGENT_ID } from '@/modules/property_documents/ai-tools'
+import { runCommand } from '../lib/commandBus'
 
 const BRIEF_FILE = 'brief.json'
 const PAGE_INVENTORY_FILE = 'pdf-pages.json'
@@ -23,21 +24,39 @@ const GROUPED_MATCHER_LIMITS = {
   limitPerNeed: 5,
 } as const
 
-const analysisInputSchema = z
+const MAX_RENDERED_PAGES = 48
+
+const workflowCommandInputSchema = z
   .object({
     tenantId: z.string().uuid(),
     organizationId: z.string().uuid(),
     workflowInstanceId: z.string().uuid(),
-    stepId: z.literal('match_catalog'),
+  })
+  .strict()
+const analysisInputSchema = workflowCommandInputSchema
+  .extend({ stepId: z.literal('match_catalog') })
+  .strict()
+const measureRoomsInputSchema = workflowCommandInputSchema
+  .extend({
+    dealId: z.string().uuid(),
+    stepId: z.literal('measure_rooms'),
   })
   .strict()
 export type AnalysisInput = z.infer<typeof analysisInputSchema>
+export type MeasureRoomsInput = z.infer<typeof measureRoomsInputSchema>
 export type PdfIntakeBrief = {
   runId: string
   brief: string
 }
+export type RoomMeasurementFanoutResult = {
+  intakeRunId: string
+  totalPages: number
+  succeeded: number
+  failed: Array<{ fileName: string; reason: string }>
+}
+type WorkflowCommandInput = AnalysisInput | MeasureRoomsInput
 type GroupedMatcherResult = z.infer<typeof catalogMatcherGroupedResultSchema>
-type CommandCtx = Parameters<CommandHandler<AnalysisInput, unknown>['execute']>[1]
+type CommandCtx = Parameters<CommandHandler<WorkflowCommandInput, unknown>['execute']>[1]
 type AgentRuntime = {
   run: (
     agentId: string,
@@ -47,7 +66,7 @@ type AgentRuntime = {
       organizationId: string
       userId: string
       workflowInstanceId: string
-      stepId: 'match_catalog'
+      stepId: AnalysisInput['stepId'] | MeasureRoomsInput['stepId']
       invocationId: string
     },
   ) => Promise<unknown>
@@ -71,6 +90,20 @@ const intakeResultSchema = z
   })
   .strict()
 const briefSchema = z.object({ brief: z.string().min(1) }).strict()
+const pageInventorySchema = z
+  .object({
+    pageCount: z.number().int().min(1).max(MAX_RENDERED_PAGES),
+    files: z.array(z.string().regex(/^pdf-page-\d{4}\.png$/)).min(1).max(MAX_RENDERED_PAGES),
+  })
+  .strict()
+  .superRefine(({ pageCount, files }, context) => {
+    if (files.length !== pageCount) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'page count does not match files' })
+    }
+    if (new Set(files).size !== files.length) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'page files must be unique' })
+    }
+  })
 
 function failIntake(reason: string): never {
   throw new Error(`[internal] PDF intake ${reason.slice(0, 180)}`)
@@ -88,7 +121,7 @@ function parseJsonArtifact<T>(bytes: Buffer, schema: z.ZodType<T>, label: string
   return parsed.data
 }
 
-function trustedScope(input: AnalysisInput, ctx: CommandCtx) {
+function trustedScope(input: WorkflowCommandInput, ctx: CommandCtx) {
   const tenantId = ctx.auth?.tenantId
   const organizationId = ctx.selectedOrganizationId ?? ctx.auth?.orgId
   if (!tenantId || !organizationId) failIntake('trusted scope is unavailable')
@@ -193,6 +226,95 @@ export async function loadPdfIntakeBrief(
   return { runId: run.id, brief }
 }
 
+type PdfIntakePage = {
+  id: string
+  fileName: string
+}
+
+async function loadPdfIntakePages(
+  em: EntityManager,
+  ctx: CommandCtx,
+  rawInput: MeasureRoomsInput,
+): Promise<{ runId: string; pages: PdfIntakePage[] }> {
+  const input = measureRoomsInputSchema.parse(rawInput)
+  const scope = trustedScope(input, ctx)
+  const run = await findIntakeRun(em, scope, input.workflowInstanceId)
+  if (
+    !run ||
+    run.tenantId !== scope.tenantId ||
+    run.organizationId !== scope.organizationId ||
+    run.workflowInstanceId !== input.workflowInstanceId ||
+    run.stepId !== 'extract_pdf' ||
+    run.agentId !== PDF_AGENT_ID ||
+    run.deletedAt != null ||
+    run.status !== 'ok' ||
+    run.resultKind !== 'artifact'
+  ) {
+    failIntake('completed run is unavailable')
+  }
+
+  const parsedResult = intakeResultSchema.safeParse(run.output)
+  if (!parsedResult.success) failIntake('invalid AgentResult')
+  const inventoryArtifact = await em.findOne(AgentRunArtifact, {
+    ...scope,
+    runId: run.id,
+    fileName: PAGE_INVENTORY_FILE,
+    deletedAt: null,
+  })
+  if (
+    !inventoryArtifact ||
+    inventoryArtifact.tenantId !== scope.tenantId ||
+    inventoryArtifact.organizationId !== scope.organizationId ||
+    inventoryArtifact.runId !== run.id ||
+    inventoryArtifact.fileName !== PAGE_INVENTORY_FILE ||
+    inventoryArtifact.deletedAt != null ||
+    inventoryArtifact.mimeType !== 'application/json'
+  ) {
+    failIntake('artifact scope mismatch')
+  }
+  const inventoryReference = parsedResult.data.artifacts[1]
+  if (inventoryReference.artifactId != null && inventoryReference.artifactId !== inventoryArtifact.id) {
+    failIntake('invalid AgentResult')
+  }
+
+  const inventory = parseJsonArtifact(
+    await readVerifiedArtifact(ctx, scope, inventoryArtifact),
+    pageInventorySchema,
+    PAGE_INVENTORY_FILE,
+  )
+  const artifacts = await em.find(AgentRunArtifact, {
+    ...scope,
+    runId: run.id,
+    deletedAt: null,
+  })
+  const artifactsByFileName = new Map<string, AgentRunArtifact>()
+  for (const artifact of artifacts) {
+    if (!inventory.files.includes(artifact.fileName)) continue
+    if (
+      artifactsByFileName.has(artifact.fileName) ||
+      artifact.tenantId !== scope.tenantId ||
+      artifact.organizationId !== scope.organizationId ||
+      artifact.runId !== run.id ||
+      artifact.deletedAt != null ||
+      artifact.mimeType !== 'image/png' ||
+      !Number.isInteger(artifact.fileSize) ||
+      artifact.fileSize < 1 ||
+      typeof artifact.storageKey !== 'string' ||
+      artifact.storageKey.length === 0 ||
+      !/^[0-9a-f]{64}$/.test(artifact.sha256)
+    ) {
+      failIntake('invalid rendered page artifact')
+    }
+    artifactsByFileName.set(artifact.fileName, artifact)
+  }
+  const pages = inventory.files.map((fileName) => {
+    const artifact = artifactsByFileName.get(fileName)
+    if (!artifact) failIntake('invalid rendered page artifact')
+    return { id: artifact.id, fileName }
+  })
+  return { runId: run.id, pages }
+}
+
 async function findSuccessfulGroupedMatcherRun(
   em: EntityManager,
   scope: { tenantId: string; organizationId: string },
@@ -274,6 +396,74 @@ const matchRequirementsCommand: CommandHandler<AnalysisInput, GroupedMatcherResu
   },
 }
 
-registerCommand(matchRequirementsCommand)
+const measureRoomsCommand: CommandHandler<MeasureRoomsInput, RoomMeasurementFanoutResult> = {
+  id: 'rfq_intake.measure-rooms',
+  execute: async (rawInput, ctx) => {
+    const input = measureRoomsInputSchema.parse(rawInput)
+    const scope = trustedScope(input, ctx)
+    const userId = ctx.auth?.sub
+    if (!userId) failIntake('trusted user is unavailable')
+    const em = (ctx.container.resolve('em') as EntityManager).fork()
+    const { runId, pages } = await loadPdfIntakePages(em, ctx, input)
+    const agentRuntime = ctx.container.resolve('agentRuntime') as AgentRuntime
+    const settled = await Promise.allSettled(
+      pages.map(async (page) => {
+        const { attachmentId } = await runCommand<
+          {
+            tenantId: string
+            organizationId: string
+            artifactId: string
+            entityId: string
+            recordId: string
+            fileName: string
+          },
+          { attachmentId: string }
+        >(ctx, 'agent_orchestrator.artifact.promote', {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          artifactId: page.id,
+          entityId: 'customers:customer_deal',
+          recordId: input.dealId,
+          fileName: page.fileName,
+        })
+        await agentRuntime.run(
+          ROOM_MEASUREMENTS_AGENT_ID,
+          {
+            __files: {
+              attachments: [{ attachmentId, as: page.fileName }],
+            },
+          },
+          {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            userId,
+            workflowInstanceId: input.workflowInstanceId,
+            stepId: input.stepId,
+            invocationId: `room-measurement:${page.id}`,
+          },
+        )
+      }),
+    )
+    const failed = settled.flatMap((result, index) =>
+      result.status === 'rejected'
+        ? [
+            {
+              fileName: pages[index]!.fileName,
+              reason: result.reason instanceof Error ? result.reason.message : 'room measurement run failed',
+            },
+          ]
+        : [],
+    )
+    return {
+      intakeRunId: runId,
+      totalPages: pages.length,
+      succeeded: pages.length - failed.length,
+      failed,
+    }
+  },
+}
 
-export { matchRequirementsCommand }
+registerCommand(matchRequirementsCommand)
+registerCommand(measureRoomsCommand)
+
+export { matchRequirementsCommand, measureRoomsCommand }

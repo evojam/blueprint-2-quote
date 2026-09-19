@@ -21,6 +21,11 @@ registerWorkflowSafeCommands([
     requiredFeatures: ['customers.deals.manage', 'sales.quotes.manage'],
     labelKey: 'rfq_intake.workflows.commands.quote.create',
   },
+  {
+    commandId: 'rfq_intake.measure-rooms',
+    requiredFeatures: ['customers.deals.manage'],
+    labelKey: 'rfq_intake.workflows.commands.measure-rooms',
+  },
 ])
 
 /**
@@ -53,7 +58,7 @@ const rfqAnalysis = defineWorkflow({
       stepId: 'extract_pdf',
       stepName: 'Read the RFQ document',
       stepType: 'AUTOMATED',
-      description: 'Extracts the PDF brief for catalog matching.',
+      description: 'Extracts the PDF brief and rendered page artifacts.',
       activities: [
         {
           activityId: 'invoke_pdf_intake',
@@ -75,6 +80,13 @@ const rfqAnalysis = defineWorkflow({
       ],
     },
     {
+      stepId: 'analyze_parallel',
+      stepName: 'Analyze brief and rendered pages',
+      stepType: 'PARALLEL_FORK',
+      description: 'Starts catalog matching and room measurements after PDF intake.',
+      config: { joinStepId: 'analysis_complete' },
+    },
+    {
       stepId: 'match_catalog',
       stepName: 'Match the brief to the catalog',
       stepType: 'AUTOMATED',
@@ -84,7 +96,7 @@ const rfqAnalysis = defineWorkflow({
           activityId: 'match_requirements',
           activityName: 'Match requirements',
           activityType: 'UPDATE_ENTITY',
-          async: false,
+          async: true,
           config: {
             commandId: 'rfq_intake.requirements.match',
             input: {
@@ -97,12 +109,47 @@ const rfqAnalysis = defineWorkflow({
         },
       ],
     },
+    {
+      stepId: 'measure_rooms',
+      stepName: 'Measure rendered PDF pages',
+      stepType: 'AUTOMATED',
+      description: 'Runs strict room measurement extraction for every rendered PDF page.',
+      activities: [
+        {
+          activityId: 'measure_rendered_pages',
+          activityName: 'Measure rendered pages',
+          activityType: 'UPDATE_ENTITY',
+          async: true,
+          config: {
+            commandId: 'rfq_intake.measure-rooms',
+            input: {
+              tenantId: '{{workflow.tenantId}}',
+              organizationId: '{{workflow.organizationId}}',
+              workflowInstanceId: '{{workflow.instanceId}}',
+              dealId: '{{workflow.dealId}}',
+              stepId: 'measure_rooms',
+            },
+          },
+        },
+      ],
+    },
+    {
+      stepId: 'analysis_complete',
+      stepName: 'Analysis complete',
+      stepType: 'PARALLEL_JOIN',
+      description: 'Waits for catalog matching and page measurements.',
+      config: { forkStepId: 'analyze_parallel' },
+    },
     { stepId: 'end', stepName: 'Done', stepType: 'END' },
   ],
   transitions: [
     { transitionId: 't_start', transitionName: 'Start', fromStepId: 'start', toStepId: 'extract_pdf', trigger: 'auto' },
-    { transitionId: 't_match', transitionName: 'Match', fromStepId: 'extract_pdf', toStepId: 'match_catalog', trigger: 'auto' },
-    { transitionId: 't_done', transitionName: 'Done', fromStepId: 'match_catalog', toStepId: 'end', trigger: 'auto' },
+    { transitionId: 't_analyze', transitionName: 'Analyze', fromStepId: 'extract_pdf', toStepId: 'analyze_parallel', trigger: 'auto' },
+    { transitionId: 't_match', transitionName: 'Match', fromStepId: 'analyze_parallel', toStepId: 'match_catalog', trigger: 'auto' },
+    { transitionId: 't_measure', transitionName: 'Measure', fromStepId: 'analyze_parallel', toStepId: 'measure_rooms', trigger: 'auto' },
+    { transitionId: 't_match_complete', transitionName: 'Catalog complete', fromStepId: 'match_catalog', toStepId: 'analysis_complete', trigger: 'auto' },
+    { transitionId: 't_measure_complete', transitionName: 'Measurements complete', fromStepId: 'measure_rooms', toStepId: 'analysis_complete', trigger: 'auto' },
+    { transitionId: 't_done', transitionName: 'Done', fromStepId: 'analysis_complete', toStepId: 'end', trigger: 'auto' },
   ],
 })
 
