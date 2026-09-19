@@ -2,7 +2,7 @@
 title: "Carry file-agent options through runtime and policy generation"
 modules: ["agent_orchestrator", "property_documents"]
 areas: ["ai-workflow", "framework-context"]
-topics: ["file-agents", "artifacts", "artifact-limits", "attachments", "workflows", "litellm", "tool-calls"]
+topics: ["file-agents", "artifacts", "attachments", "workflows", "litellm", "tool-calls"]
 ---
 
 # Carry file-agent options through runtime and policy generation

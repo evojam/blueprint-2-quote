@@ -1,6 +1,6 @@
 # Lessons
 
-This catalog indexes 1 focused lessons without loading their full text. Route the task first, then read only records whose **modules**, standalone-harness **areas**, or **topics** match the work.
+This catalog indexes 2 focused lessons without loading their full text. Route the task first, then read only records whose **modules**, standalone-harness **areas**, or **topics** match the work.
 
 ## How to use this catalog
 
@@ -28,4 +28,8 @@ rg -l '"<area>"|"<module>"|"<topic>"' .ai/lessons/*.md
 
 ### ai-workflow
 
-- [Carry file-agent options through runtime and policy generation](lessons/file-agent-options-need-runtime-and-policy.md) — area:ai-workflow,framework-context; module:agent_orchestrator,property_documents; topic:file-agents,artifacts,artifact-limits,attachments,workflows,litellm,tool-calls
+- [Carry file-agent options through runtime and policy generation](lessons/file-agent-options-need-runtime-and-policy.md) — area:ai-workflow,framework-context; module:agent_orchestrator,property_documents; topic:file-agents,artifacts,attachments,workflows,litellm,tool-calls
+
+### umes
+
+- [Overriding an inbox action buys the execution schema, not the edit schema](lessons/inbox-action-override-owns-only-execution-schema.md) — area:umes,module-data,framework-context; module:inbox_ops,rfq_intake,sales; topic:inbox-actions,validation,action-overrides,two-sources-of-truth
