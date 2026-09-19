@@ -2,7 +2,8 @@ import './lib/i18n/register-dictionary-loader'
 
 import type { BootstrapData } from '@open-mercato/shared/lib/bootstrap'
 import { enabledModules } from '@/modules'
-import { applyModuleOverridesFromEnabledModules } from '@open-mercato/shared/modules/overrides'
+import { applyApiRouteOverrides, applyModuleOverridesFromEnabledModules } from '@open-mercato/shared/modules/overrides'
+import { PUBLIC_QUOTE_ACCEPT_ROUTE_OVERRIDE } from '@/lib/publicQuoteAcceptOrigin'
 import '@open-mercato/ai-assistant/modules/ai_assistant/lib/ai-overrides'
 
 import { modules } from '@/.mercato/generated/modules.bootstrap.generated'
@@ -32,6 +33,33 @@ import { allCodeWorkflows } from '@/.mercato/generated/workflows.generated'
 import { registerCodeWorkflows } from '@open-mercato/core/modules/workflows/lib/code-registry'
 
 applyModuleOverridesFromEnabledModules(enabledModules)
+
+/**
+ * Keeps `POST /api/sales/quotes/accept` reachable behind the ALB.
+ *
+ * The installed guard compares the browser `Origin` against `new URL(req.url).origin`,
+ * which Next.js standalone builds from its own listen identity — `https://localhost:3000`
+ * here. Every customer therefore gets 403 on Accept while the quote page itself renders.
+ * Mechanism and measurements: `src/lib/publicQuoteAcceptOrigin.ts` and
+ * `.ai/notes/quote-accept-failure-leads.md`. Upstream: open-mercato/open-mercato#6283.
+ *
+ * Registered HERE, programmatically, rather than as an `entry.overrides.routes.api` entry
+ * in `src/modules.ts` — which is where the unified-override reference points first, and
+ * which does not work in this app. `ClientBootstrap.tsx:66` does `import('@/modules')` in
+ * the BROWSER to apply the widget and notification overrides, so anything `modules.ts`
+ * imports is client-reachable. Naming the handler there dragged the installed sales route,
+ * and `server-only` with it, into the client graph: `yarn build` failed with 48 Turbopack
+ * errors whose import trace read modules.ts -> ClientBootstrap -> layout.tsx. This file is
+ * imported only by `bootstrap.ts` and `bootstrap-api.ts`, both server-side.
+ *
+ * Ordering is load-bearing: `applyApiRouteOverrides` mutates a store that
+ * `registerApiRouteManifests` reads ONCE, and a call made after manifests are registered
+ * does not apply retro-actively. Module-level statements here run while `bootstrap.ts` /
+ * `bootstrap-api.ts` are still resolving their imports, so this lands before
+ * `createBootstrap(...)` executes.
+ */
+applyApiRouteOverrides(PUBLIC_QUOTE_ACCEPT_ROUTE_OVERRIDE)
+
 registerEventModuleConfigs(eventModuleConfigs)
 registerMessageTypes(messageTypes, { replace: true })
 registerMessageObjectTypes(messageObjectTypes, { replace: true })
