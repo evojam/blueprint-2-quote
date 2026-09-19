@@ -3,6 +3,7 @@ import { InboxEmail, InboxProposal } from '@open-mercato/core/modules/inbox_ops/
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { createLogger } from '@open-mercato/shared/lib/logger'
 import { emitRfqIntakeEvent } from '../events'
+import { startRfqAnalysisProcess } from '../lib/startProcess'
 
 const logger = createLogger('rfq_intake').child({ subscriber: 'start-rfq-analysis' })
 
@@ -39,16 +40,12 @@ export type RfqCreatedEvent = {
   tenantId: string
   organizationId: string
   /**
-   * The identity the whole chain runs as, and the reason this field is not
-   * decoration: `loadCodeTriggers` reads exactly `payload.userId` (or
-   * `actorUserId`) and falls back to `initiatedBy: 'trigger:<id>'` when neither is
-   * present — an instance with no actor at all.
+   * Whoever accepted the action in the inbox. Carried on the event so a subscriber
+   * other than ours can attribute the RFQ without re-reading the action.
    *
-   * A code workflow has no `grantedFeatures` and its virtual definition carries no
-   * `createdBy`, so there is no second place to recover an identity from. Without
-   * this field `INVOKE_AGENT` has no traceable principal and `UPDATE_ENTITY` fails
-   * with "requires an authenticated workflow user" — the chain dies on its first
-   * step.
+   * The chain's own copy of this identity travels through the process execution
+   * (`lib/startProcess.ts`), not through this payload — see the note there for why
+   * a run without an actor cannot execute a single step.
    */
   userId: string
   __files: { attachments: Array<{ attachmentId: string }> }
@@ -158,6 +155,27 @@ export default async function handler(
     __files: { attachments: attachmentIds.map((attachmentId) => ({ attachmentId })) },
   }
 
+  // Announced, not dispatched. The chain no longer hangs off this event — it is a
+  // declared domain event other modules may subscribe to, and the audit trail of an
+  // RFQ having been opened.
   await emitRfqIntakeEvent('rfq_intake.rfq.created', event, { persistent: true })
+
+  const { started, reason } = await startRfqAnalysisProcess(
+    ctx.resolve,
+    em,
+    { tenantId, organizationId },
+    userId,
+    {
+      dealId,
+      proposalId,
+      emailId: proposal.inboxEmailId,
+      __files: event.__files,
+    },
+  )
+  if (!started) {
+    logger.warn('RFQ case opened but the analysis did not start', { dealId, reason })
+    return
+  }
+
   logger.info('RFQ analysis requested', { dealId, attachments: attachmentIds.length })
 }
