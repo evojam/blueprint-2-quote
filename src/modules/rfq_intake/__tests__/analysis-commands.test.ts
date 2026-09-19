@@ -11,20 +11,32 @@ jest.mock('@/modules/property_documents/ai-tools', () => ({
 }))
 jest.mock('@/modules/property_documents/ai-agents', () => {
   const { z } = jest.requireActual<typeof Zod>('zod')
+  const catalogMatcherGroupedResultSchema = z
+    .object({
+      kind: z.literal('research'),
+      data: z
+        .object({
+          contractVersion: z.literal(2),
+          needs: z.array(z.object({ matches: z.array(z.unknown()) }).passthrough()),
+          warnings: z.array(z.string()),
+        })
+        .strict(),
+    })
+    .strict()
   return {
     CATALOG_MATCHER_AGENT_ID: 'property_documents.catalog_matcher',
-    catalogMatcherGroupedResultSchema: z
-      .object({
-        kind: z.literal('research'),
-        data: z
-          .object({
-            contractVersion: z.literal(2),
-            needs: z.array(z.unknown()),
-            warnings: z.array(z.string()),
-          })
-          .strict(),
-      })
-      .strict(),
+    catalogMatcherGroupedResultSchema,
+    parseCatalogMatcherGroupedResult: (
+      raw: unknown,
+      limits: { maxNeeds: number; limitPerNeed: number },
+    ) => {
+      const parsed = catalogMatcherGroupedResultSchema.parse(raw)
+      if (parsed.data.needs.length > limits.maxNeeds) throw new Error('result exceeds maxNeeds')
+      if (parsed.data.needs.some((need) => need.matches.length > limits.limitPerNeed)) {
+        throw new Error('result exceeds limitPerNeed')
+      }
+      return parsed
+    },
   }
 })
 jest.mock('@open-mercato/enterprise/modules/agent_orchestrator/lib/runtime/artifactFileStore', () => ({
@@ -56,6 +68,19 @@ const GROUPED_RESULT = {
   data: {
     contractVersion: 2,
     needs: [],
+    warnings: [],
+  },
+}
+
+const GROUPED_OVER_LIMIT_RESULT = {
+  kind: 'research',
+  data: {
+    contractVersion: 2,
+    needs: [
+      {
+        matches: Array.from({ length: 6 }, () => ({})),
+      },
+    ],
     warnings: [],
   },
 }
@@ -252,6 +277,18 @@ describe('loadPdfIntakeBrief', () => {
     expect(getArtifactBytes).toHaveBeenCalledTimes(1)
   })
 
+  it('accepts a decoded brief exactly at the byte limit', async () => {
+    const fixture = makeFixture()
+    fixture.briefBytes = Buffer.from(JSON.stringify({ brief: 'a'.repeat(65_536) }))
+    fixture.briefArtifact = makeArtifact(fixture.briefBytes)
+    const harness = buildCtx(fixture)
+
+    await expect(loadPdfIntakeBrief(harness.em as never, harness.ctx, INPUT)).resolves.toEqual({
+      runId: RUN_ID,
+      brief: 'a'.repeat(65_536),
+    })
+  })
+
   it.each([
     ['foreign artifact scope', (fixture: Fixture) => { fixture.briefArtifact.tenantId = '99999999-9999-4999-8999-999999999999' }, 'artifact scope mismatch'],
     ['wrong brief MIME', (fixture: Fixture) => { fixture.briefArtifact.mimeType = 'application/octet-stream' }, 'invalid artifact metadata'],
@@ -315,6 +352,23 @@ describe('matchRequirementsCommand', () => {
       status: 'ok',
       deletedAt: null,
     })
+  })
+
+  it('does not reuse a grouped result exceeding limitPerNeed', async () => {
+    const fixture = makeFixture()
+    fixture.matcherRuns = [makeMatcherRun({ output: GROUPED_OVER_LIMIT_RESULT })]
+    const harness = buildCtx(fixture)
+
+    await expect(matchRequirementsCommand.execute(INPUT, harness.ctx)).resolves.toEqual(GROUPED_RESULT)
+    expect(harness.agentRuntime.run).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a runtime result exceeding limitPerNeed', async () => {
+    const fixture = makeFixture()
+    fixture.runtimeResult = GROUPED_OVER_LIMIT_RESULT
+    const harness = buildCtx(fixture)
+
+    await expect(matchRequirementsCommand.execute(INPUT, harness.ctx)).rejects.toThrow('limitPerNeed')
   })
 
   it.each([

@@ -11,6 +11,7 @@ import {
   CATALOG_MATCHER_AGENT_ID,
   catalogMatcherGroupedResultSchema,
   catalogMatcherResultSchema,
+  parseCatalogMatcherGroupedResult,
 } from '../ai-agents'
 import '../ai-agents'
 
@@ -174,5 +175,29 @@ describe('property_documents.catalog_matcher', () => {
     ]) {
       expect(catalogMatcherGroupedResultSchema.safeParse(invalid).success).toBe(false)
     }
+  })
+
+  it('enforces the caller-provided per-need match limit after schema validation', () => {
+    const overLimit = {
+      ...groupedEnvelope,
+      data: {
+        ...groupedEnvelope.data,
+        needs: [
+          {
+            ...groupedEnvelope.data.needs[0]!,
+            matches: Array.from({ length: 6 }, (_, index) => ({
+              ...match,
+              catalogProductId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+              score: 0.95 - index / 100,
+            })),
+          },
+        ],
+      },
+    }
+
+    expect(catalogMatcherGroupedResultSchema.safeParse(overLimit).success).toBe(true)
+    expect(() =>
+      parseCatalogMatcherGroupedResult(overLimit, { maxNeeds: 40, limitPerNeed: 5 }),
+    ).toThrow('limitPerNeed')
   })
 })
