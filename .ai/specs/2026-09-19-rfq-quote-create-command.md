@@ -236,7 +236,9 @@ A second axis (`subject` × `metric`) was considered and rejected for now: more 
 
 `sales.quotes.create` (`node_modules/@open-mercato/core/src/modules/sales/commands/documents.ts:4713`, schema `sales/data/validators.ts:741`) returns `{ quoteId }`. It requires `tenantId`, `organizationId` and `currencyCode`; `quoteNumber` is optional and self-generates through `salesDocumentNumberGenerator`, so this slice does not reserve one. Payload scope is verified against the runtime context by `ensureQuoteScope` (`documents.ts:4740`) — checked, never trusted.
 
-Lines are emitted as `kind: 'service'` with `quantity`, `quantityUnit`, `unitPriceGross`, `taxRateId`, `priceMode: 'gross'`, `name` from the product title, `description` from the item `note`, and a `catalogSnapshot`. Gross pricing is not a choice: the seed writes `unitPriceGross` with a VAT 8% `taxRateId`. Quote `metadata` carries `{ rfqDealId, roomMeasurementsRunId, source: 'rfq_intake' }`.
+Lines are emitted as `kind: 'service'` with `quantity`, `quantityUnit`, `unitPriceGross`, `taxRate`, `priceMode: 'gross'`, `name` from the product title, `description` from the item `note`, and a `catalogSnapshot`. Quote `metadata` carries `{ rfqDealId, roomMeasurementsRunId, source: 'rfq_intake' }`.
+
+Gross pricing is not a choice: `catalog_seed` creates every row through `catalog.prices.create` with a gross amount. **The tax figure, however, is a rate and not an identity.** `catalog_product_variant_prices` has a numeric `tax_rate` column and **no `tax_rate_id`** — `catalog.prices.create` feeds its input `taxRateId` to `taxCalculationService.calculateUnitAmounts` and persists only the derived `taxRate` and `taxAmount`. A line therefore carries `taxRate`, which is the rate that actually produced `unitPriceGross`. A tax *identity* exists only on `catalog_product_variants.tax_rate_id` and `catalog_products.tax_rate_id`; it is resolved alongside the product and may be attached as `taxRateId` when Sales needs one, but it is a weaker claim than the rate and must never contradict it.
 
 ## 📝 Temporary Probe Agent
 

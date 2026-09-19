@@ -48,7 +48,14 @@ export type QuotableProduct = {
   /** Always resolved: the supplied variant, or the product's `isDefault` one. */
   variantId: string
   title: string
-  defaultUnit: QuoteUnit | null
+  /** Narrowed on the way out, so a success never carries an unusable unit. */
+  defaultUnit: QuoteUnit
+  /**
+   * Tax identity lives on the variant (`catalog_product_variants.tax_rate_id`) or the
+   * product (`catalog_products.tax_rate_id`) — NOT on the price row, which has no such
+   * column. Variant wins when both are set.
+   */
+  taxRateId: string | null
 }
 
 export type ProductFailureCode =
@@ -56,19 +63,26 @@ export type ProductFailureCode =
   | 'variant_not_found'
   /** The supplied variant belongs to a different product. Never substituted. */
   | 'variant_foreign'
+  /** The variant exists but is not active, so it must not be sold. */
+  | 'variant_inactive'
   /** The product's `defaultUnit` is absent or outside `QUOTE_UNITS`. */
   | 'unit_unsupported'
 
 /**
  * Prices live on the VARIANT: `catalog_seed` writes every row through
  * `catalog.prices.create` with a `variantId` into `catalog_product_variant_prices`.
- * Gross, because the seed writes `unitPriceGross` with a VAT 8% `taxRateId`.
+ *
+ * The row carries a numeric `tax_rate` and **no `tax_rate_id`** — `catalog.prices.create`
+ * feeds its input `taxRateId` to `taxCalculationService` and persists only the derived
+ * rate. So the authoritative tax figure here is the rate that actually produced
+ * `unitPriceGross`; the identity, when one is needed, comes from `QuotableProduct`.
  */
 export type UnitPrice = {
   currencyCode: string
-  /** Numeric string, as MikroORM returns `numeric`. Never parsed to a float. */
+  /** Numeric strings, as MikroORM returns `numeric`. Never parsed to a float. */
   unitPriceGross: string
-  taxRateId: string | null
+  /** Percentage as a numeric string, e.g. `'8.0000'`. Null when the row carries none. */
+  taxRate: string | null
   priceId: string
 }
 
