@@ -4,6 +4,7 @@ import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { createLogger } from '@open-mercato/shared/lib/logger'
 import { emitRfqIntakeEvent } from '../events'
 import { startRfqAnalysisProcess } from '../lib/startProcess'
+import { fetchInboundPdfs, resolveResendApiKey, storeInboundPdfs } from '../lib/inboundAttachments'
 
 const logger = createLogger('rfq_intake').child({ subscriber: 'start-rfq-analysis' })
 
@@ -74,6 +75,66 @@ export function isRfqActionExecuted(payload: ActionExecutedPayload): boolean {
   )
 }
 
+/**
+ * Fetches and stores the e-mail's PDFs, then links them on the e-mail row so a second
+ * acceptance of the same RFQ finds them and skips the provider entirely.
+ *
+ * Best effort throughout: a provider outage, an unconfigured integration or a failed
+ * download leaves the case open without attachments — the same outcome as an enquiry that
+ * genuinely had none. The caller's existing log line covers it.
+ */
+async function pullInboundAttachments(
+  resolve: SubscriberContext['resolve'],
+  em: EntityManager,
+  input: { scope: { tenantId: string; organizationId: string }; emailId: string; messageId: string | null },
+): Promise<string[]> {
+  try {
+    const key = await resolveResendApiKey(resolve, input.scope)
+    if (!key) {
+      logger.info('No Resend key from the integration or the environment; skipping the pull', {
+        emailId: input.emailId,
+      })
+      return []
+    }
+
+    const files = await fetchInboundPdfs({ apiKey: key.apiKey, messageId: input.messageId })
+    if (files.length === 0) return []
+
+    const ids = await storeInboundPdfs({ em, scope: input.scope, emailId: input.emailId, files })
+    if (ids.length === 0) return []
+
+    // Linking is an optimization, not a precondition: it makes a second acceptance skip
+    // the provider and lets the inbox UI show the files (its response mapper already
+    // reads this field). The attachments are stored and usable whether or not it lands,
+    // so its failure must not discard them — the analysis is the point.
+    try {
+      const row = await em.findOne(InboxEmail, { id: input.emailId, ...input.scope, deletedAt: null })
+      if (row) {
+        row.attachmentIds = ids
+        await em.flush()
+      }
+    } catch (error) {
+      logger.warn('Stored the attachments but could not link them to the e-mail', {
+        emailId: input.emailId,
+        err: error,
+      })
+    }
+
+    logger.info('Pulled inbound attachments for an accepted RFQ', {
+      emailId: input.emailId,
+      count: ids.length,
+      keySource: key.source,
+    })
+    return ids
+  } catch (error) {
+    logger.warn('Inbound attachment pull failed; the case stays open without them', {
+      emailId: input.emailId,
+      err: error,
+    })
+    return []
+  }
+}
+
 export default async function handler(
   payload: ActionExecutedPayload,
   ctx: SubscriberContext,
@@ -130,9 +191,23 @@ export default async function handler(
     scope,
   )
 
-  const attachmentIds = (email?.attachmentIds ?? []).filter(
+  let attachmentIds = (email?.attachmentIds ?? []).filter(
     (id): id is string => typeof id === 'string' && id.trim().length > 0,
   )
+
+  // Nothing populates `attachment_ids` on the way in — the installed inbound route has no
+  // attachment handling at all — so an empty list here is the normal case, not an
+  // exception. Pull this ONE e-mail's PDFs now that a human has accepted the RFQ.
+  // Deliberately not done on `inbox_ops.email.received`: that would fetch and store files
+  // for every e-mail reaching the platform. See
+  // `.ai/specs/2026-09-19-rfq-attachment-ingestion.md`.
+  if (attachmentIds.length === 0 && email) {
+    attachmentIds = await pullInboundAttachments(ctx.resolve, em, {
+      scope: { tenantId, organizationId },
+      emailId: proposal.inboxEmailId,
+      messageId: email.messageId ?? null,
+    })
+  }
 
   if (attachmentIds.length === 0) {
     // Not a failure: the case is open and useful. Say so rather than letting the

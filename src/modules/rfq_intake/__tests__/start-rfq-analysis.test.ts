@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, jest } from '@jest/globals'
 const emitRfqIntakeEvent = jest.fn<(...args: any[]) => Promise<void>>()
 const startRfqAnalysisProcess = jest.fn<(...args: any[]) => Promise<any>>()
 const findOneWithDecryption = jest.fn<(...args: any[]) => Promise<any>>()
+const resolveResendApiKey = jest.fn<(...args: any[]) => Promise<any>>()
+const fetchInboundPdfs = jest.fn<(...args: any[]) => Promise<any>>()
+const storeInboundPdfs = jest.fn<(...args: any[]) => Promise<any>>()
 
 jest.mock('../events', () => ({
   emitRfqIntakeEvent: (...args: any[]) => emitRfqIntakeEvent(...args),
@@ -12,6 +15,11 @@ jest.mock('@open-mercato/shared/lib/encryption/find', () => ({
 }))
 jest.mock('../lib/startProcess', () => ({
   startRfqAnalysisProcess: (...args: any[]) => startRfqAnalysisProcess(...args),
+}))
+jest.mock('../lib/inboundAttachments', () => ({
+  resolveResendApiKey: (...args: any[]) => resolveResendApiKey(...args),
+  fetchInboundPdfs: (...args: any[]) => fetchInboundPdfs(...args),
+  storeInboundPdfs: (...args: any[]) => storeInboundPdfs(...args),
 }))
 
 import handler, { type ActionExecutedPayload } from '../subscribers/start-rfq-analysis'
@@ -48,6 +56,12 @@ describe('start-rfq-analysis', () => {
     findOneWithDecryption
       .mockResolvedValueOnce({ id: 'proposal-1', inboxEmailId: 'email-1' })
       .mockResolvedValueOnce({ id: 'email-1', attachmentIds: ['attachment-1'] })
+    resolveResendApiKey.mockReset()
+    resolveResendApiKey.mockResolvedValue({ apiKey: 'test-key', source: 'environment' })
+    fetchInboundPdfs.mockReset()
+    fetchInboundPdfs.mockResolvedValue([])
+    storeInboundPdfs.mockReset()
+    storeInboundPdfs.mockResolvedValue([])
   })
 
   /**
@@ -112,6 +126,52 @@ describe('start-rfq-analysis', () => {
 
     await handler(executedAction(), ctx)
 
+    expect(emitRfqIntakeEvent).not.toHaveBeenCalled()
+    expect(startRfqAnalysisProcess).not.toHaveBeenCalled()
+  })
+
+  // The lazy pull: nothing writes `attachment_ids` on the way in, so an empty list is
+  // the normal case and the RFQ's PDFs are fetched here, at the moment a human accepted it.
+  it('pulls the attachments when the e-mail has none linked, then starts the analysis', async () => {
+    findOneWithDecryption.mockReset()
+    findOneWithDecryption
+      .mockResolvedValueOnce({ id: 'proposal-1', inboxEmailId: 'email-1' })
+      .mockResolvedValueOnce({ id: 'email-1', attachmentIds: [], messageId: '<abc@mail>' })
+    fetchInboundPdfs.mockResolvedValue([{ fileName: 'rzut.pdf', mimeType: 'application/pdf', buffer: Buffer.from('x') }])
+    storeInboundPdfs.mockResolvedValue(['attachment-new'])
+
+    await handler(executedAction(), ctx)
+
+    expect(fetchInboundPdfs).toHaveBeenCalledWith({ apiKey: 'test-key', messageId: '<abc@mail>' })
+    // The `em` stub has no `findOne`, so writing the link back throws. That is
+    // deliberate here: the attachments are already in storage and usable, so a failed
+    // link must not discard them — the analysis still has to start.
+    expect(startRfqAnalysisProcess).toHaveBeenCalled()
+    const event = emitRfqIntakeEvent.mock.calls[0]?.[1] as { __files: { attachments: Array<{ attachmentId: string }> } }
+    expect(event.__files.attachments).toEqual([{ attachmentId: 'attachment-new' }])
+  })
+
+  // Idempotence: a second acceptance of the same RFQ must not go back to the provider.
+  it('does not touch the provider when attachments are already linked', async () => {
+    await handler(executedAction(), ctx)
+
+    expect(resolveResendApiKey).not.toHaveBeenCalled()
+    expect(fetchInboundPdfs).not.toHaveBeenCalled()
+    expect(startRfqAnalysisProcess).toHaveBeenCalled()
+  })
+
+  // A provider outage, an unconfigured integration or a genuinely attachment-free
+  // enquiry all land here, and all keep today's behavior: the case is open, no analysis.
+  it('keeps the case open when the pull yields nothing', async () => {
+    findOneWithDecryption.mockReset()
+    findOneWithDecryption
+      .mockResolvedValueOnce({ id: 'proposal-1', inboxEmailId: 'email-1' })
+      .mockResolvedValueOnce({ id: 'email-1', attachmentIds: [], messageId: '<abc@mail>' })
+    fetchInboundPdfs.mockResolvedValue([])
+
+    await handler(executedAction(), ctx)
+
+    expect(fetchInboundPdfs).toHaveBeenCalled()
     expect(emitRfqIntakeEvent).not.toHaveBeenCalled()
     expect(startRfqAnalysisProcess).not.toHaveBeenCalled()
   })
