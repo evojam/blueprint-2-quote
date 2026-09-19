@@ -17,6 +17,7 @@ Make the RFQ PDF intake agent receive its staged file, complete without an OpenC
 - The local runtime must restart after changing ignored S3 environment settings before artifact persistence can be verified live.
 
 ## Progress
+PR: #37
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
@@ -32,4 +33,4 @@ Make the RFQ PDF intake agent receive its staged file, complete without an OpenC
 ### Phase 3: Delivery
 
 - [x] 3.1 Run the configured full validation gate. — 93a2185
-- [ ] 3.2 Publish the rebased branch and open the review PR.
+- [x] 3.2 Publish the rebased branch and open the review PR. — 89217fc
