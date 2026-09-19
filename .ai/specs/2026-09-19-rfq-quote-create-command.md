@@ -5,39 +5,45 @@
 
 ## 📝 TLDR
 
-An app-owned command, `rfq_intake.quote.create`, turns an agent's mapping of renovation work onto Catalog service types into a scoped, editable, unsent `SalesQuote`. The agent supplies only what it is qualified to supply — which service a piece of work is, and the raw geometry it read from the brief. Every multiplication, unit check, price lookup, and scope derivation happens in deterministic code. The Catalog product's `defaultUnit` acts as the type system for the agent's output: a measurement whose computed unit does not match the mapped service is rejected rather than coerced.
+An app-owned command, `rfq_intake.quote.create`, turns an agent's mapping of renovation work onto Catalog service types into a scoped, editable, unsent `SalesQuote`. The agent emits **identifiers and one enum per item — no arithmetic at all**: which Catalog service the work is, which rooms it applies to, and on what basis the quantity is measured. Every geometric computation, unit normalization, price lookup, and scope derivation happens in deterministic code over the `property_documents.room_measurements` result.
 
-This is the repository's **first use of the Agent Orchestrator's proposal-execution mechanism**, so this document specifies that path in full rather than assuming it.
+Two things make this possible and are specified here in full: the **Agent Orchestrator's proposal-execution mechanism**, whose first use in this repository this would be, and the **deterministic geometry reduction** that makes the model's arithmetic unnecessary.
+
+A **temporary probe agent** ships with it, whose only purpose is to exercise that mechanism end to end before the real mapping agent exists.
 
 ## 📝 Problem Statement
 
-The RFQ analysis chain ends with catalog matches and no priced document. Composing a quote requires arithmetic over measurements — wall areas minus openings, summed runs, counted fixtures — and a price lookup per line. Both are things a language model does unreliably and code does exactly.
+The RFQ analysis chain ends with catalog matches and no priced document. Composing a quote requires arithmetic over measurements — wall areas minus openings, floor polygons minus voids, summed runs, counted fixtures — and a price lookup per line. Both are things a language model does unreliably and code does exactly.
 
-The seeded renovation catalog (`src/modules/catalog_seed/data/renovation-catalog.ts`, 46 services) shows why the split matters. Services bill in four units: `szt` (27 services), `m2` (11), `mb` (5), `kpl` (2). A model asked for a finished quantity has to silently pick a unit convention, a multiplication, and a deduction rule per service, with no place to record which it chose. A model asked only *"which service is this, and what did the brief say the dimensions were"* produces a checkable artifact: the command recomputes the number and can prove the unit is the one the service actually bills in.
+The seeded renovation catalog (`src/modules/catalog_seed/data/renovation-catalog.ts`, 46 services) shows why the split matters. Services bill in four units: `szt` (27 services), `m2` (11), `mb` (5), `kpl` (2). A model asked for a finished quantity has to silently pick a unit convention, a multiplication, and a deduction rule per service, with no place to record which it chose.
 
 Multi-variant services make the stakes concrete. Wall painting (`REN-FIN-01`) carries three paint variants at 40, 55 and 65 PLN/m²; floor panels (`REN-FIN-07`) three at 70, 90 and 130. A wrong variant is a 60%+ error on the line, and nothing downstream catches it: **every price field on a Sales quote line is optional**, so `sales.quotes.create` will happily persist a quote whose lines carry no price at all.
 
 ## 📝 Proposed Solution
 
-One command, invoked with a per-item mapping and a per-item measurement. The command owns scope derivation, deal verification, customer resolution, quantity computation, the unit gate, variant and price resolution, and the call to Sales. The agent owns nothing but the mapping and the numbers it read.
+One command. The agent names the service and the basis; the command resolves the geometry, the unit, the variant, the price, the customer and the scope.
 
-**Alternative considered — agent returns finished quantities.** Rejected: it moves arithmetic into the model and leaves no artifact to re-verify. The unit gate becomes impossible, because a bare number carries no claim about how it was derived.
+**Alternative considered — agent returns finished quantities.** Rejected: it moves arithmetic into the model and leaves no artifact to re-verify.
 
-**Alternative considered — a `quote_draft_composer` agent emitting typed `derivation` coordinates** (the design in `.ai/specs/2026-09-19-property-document-sales-quote-drafts.md`). Deferred: it presupposes a composer agent and durable, replayable `AgentRun` evidence, neither of which exists yet. The measurement contract here is the same idea with the indirection removed — the agent states the geometry directly instead of pointing at evidence rows the command must reload.
+**Alternative considered — agent returns raw geometry** (an earlier revision of this spec proposed a `Measurement` union of rectangles, segments and counts). Dropped once `property_documents.room_measurements` was examined: the agent would be re-typing geometry that already exists in a validated, evidence-bearing form, and a rectangle union cannot express an L-shaped room at all. Every quantity this command needs is computable from the V2 result by closed-form arithmetic, so the agent should reference it rather than restate it.
+
+**Alternative considered — a `quote_draft_composer` agent emitting typed `derivation` coordinates** (the design in `docs/superpowers/plans/2026-09-19-rfq-sales-quote-drafts.md`). Superseded: the basis enum below carries the same information in one field, and the command derives the rest.
 
 ## 📝 Architecture
 
 ### Relationship to the existing RFQ documents
 
-Two neighbouring documents exist on `main`, and they do not currently agree with each other.
+`.ai/specs/2026-09-19-property-document-sales-quote-drafts.md` ("RFQ PDF Intake to Catalog Match", approved 2026-09-19) puts this capability **explicitly out of its own scope**: its TLDR states that *"room analysis, quote composition, Sales quote creation, CRM stage changes, UI, migrations, and later agents are deliberately outside this slice."* There is therefore no competing spec, and `.ai/guides/spec-delivery.md` rule 4 is satisfied: **this document owns `rfq_intake.quote.create`**.
 
-`.ai/specs/2026-09-19-property-document-sales-quote-drafts.md` ("RFQ PDF Intake to Catalog Match", approved 2026-09-19) puts this capability **explicitly out of its own scope**: its TLDR states that *"room analysis, quote composition, Sales quote creation, CRM stage changes, UI, migrations, and later agents are deliberately outside this slice."* There is therefore no competing spec for quote creation, and `.ai/guides/spec-delivery.md` rule 4 is satisfied: **this document owns `rfq_intake.quote.create`**, filling a gap the neighbouring spec deliberately left open.
+`docs/superpowers/plans/2026-09-19-rfq-sales-quote-drafts.md`, also on `main`, plans `rfq_intake.quote.create` and `rfq_intake.quote.compose` while citing that same spec, so on `main` the plan is ahead of the spec it names. **This spec supersedes that plan's quote-creation design.** The plan requires product-level price candidates with `productVariantId = null` (`:365`, `:393`); `catalog_seed` creates prices exclusively with a `variantId` (`src/modules/catalog_seed/cli.ts:268-277`) into `catalog_product_variant_prices`. `CatalogProductPrice` carries both a nullable `product` and a nullable `variant` relation, so product-level rows are *schematically* possible — but **not one exists in the seeded catalog**, so that lookup returns zero prices and every line is dropped. This spec resolves prices on the variant.
 
-`docs/superpowers/plans/2026-09-19-rfq-sales-quote-drafts.md`, also on `main`, is the exception. It plans `rfq_intake.quote.create` and `rfq_intake.quote.compose` in detail while citing that same spec as its source — so on `main` the plan is ahead of the spec it names. **This spec supersedes that plan's quote-creation design**, for one concrete reason.
+**Reviewer note.** A longer, unmerged revision of the neighbouring spec exists on branch `feat/deal-document-links`; it declares `rfq_intake.quote.create` in a Commands table with the same product-level pricing assumption. Whoever merges that branch must reconcile it rather than land a second owner for the command.
 
-The plan requires product-level price candidates with `productVariantId = null` and requires the resolved row to carry a null variant (`:365`, `:393`). `catalog_seed` creates prices exclusively through `catalog.prices.create` with a `variantId` (`src/modules/catalog_seed/cli.ts:268-277`); the table is `catalog_product_variant_prices`. `CatalogProductPrice` does carry both a nullable `product` and a nullable `variant` relation, so product-level rows are *schematically* possible — but **not one exists in the seeded catalog**. Against demo data that lookup returns zero prices, every line is dropped, and the run ends in `review_required` with no quote. This spec resolves prices on the variant.
+### Dependency on the room-measurements agent (PR #35)
 
-**Reviewer note.** A longer, unmerged revision of the neighbouring spec exists on branch `feat/deal-document-links`; it does declare `rfq_intake.quote.create` in a Commands table and carries the same product-level pricing assumption. Whoever merges that branch must reconcile it with this document rather than land a second owner for the command.
+This command consumes the **V2** contract added by `feat/property-pdf-agents`: `property_documents.room_measurements`, whose result is `{ schemaVersion, analysisStatus, drawing, rooms[], warnings }`. That PR states RFQ integration is deferred and keeps the legacy V1 `Room[]` available; this spec is the RFQ side of that cutover and targets V2 only.
+
+The command reads the agent result in trusted scope. It never receives geometry through the agent payload.
 
 ### How the agent invokes the command
 
@@ -66,11 +72,11 @@ proposal agent
 
 Sources: `executeProposal.ts`, `actionVocabulary.ts`, `disposition/dispositionService.ts:75-99`, and `data/entities.ts:1137` (`selected_option_id`), all under `node_modules/@open-mercato/enterprise/src/modules/agent_orchestrator/`.
 
-`executeProposal` is an **optional helper with no caller anywhere in this repository** — its own doc comment says *"this helper is not mandatory in the MVP"*, and `actionCommandMap` is supplied by the caller. Providing that caller is this spec's work. A post-agent workflow step is the correct seam: disposition is settled by the time the next step runs on both branches (auto-approve proceeds without parking; the human branch resumes only after disposal), and the effect therefore stays post-commit.
+`executeProposal` is an **optional helper with no caller anywhere in this repository** — its own doc comment says *"this helper is not mandatory in the MVP"*, and `actionCommandMap` is supplied by the caller. Providing that caller is this spec's work. A post-agent step is the correct seam: disposition is settled by the time it runs on both branches, so the effect stays post-commit.
 
 ### The five gates, all of which must hold
 
-A failure in any one of these produces a silent `skipped`, not an error. They are listed together because four of them are invisible at the call site.
+A failure in any one produces a silent `skipped`, not an error. Four are invisible at the call site.
 
 | # | Gate | Where it is satisfied | Symptom when missing |
 |---|---|---|---|
@@ -80,91 +86,114 @@ A failure in any one of these produces a silent `skipped`, not an error. They ar
 | 4 | `actionCommandMap` maps the action type to the command ID | the app's `apply_proposal` command | `skipped: no command mapped for action type "…"` |
 | 5 | The action vocabulary is loadable at all | the `workflows` peer module being present | `available: false` blocks **every** effect, by design |
 
-Gate 3 accepts either name: `isEffectWithinVocabulary` passes when `allowedActions` contains the action type **or** the command ID.
-
-Gates 1 and 2 are the demo-killers. The other three RFQ workflow commands already carry the same constraint, and the module's own comment records why: upstream discourages grandfathering new commands, so nothing runs until a tenant enables it once.
+Gate 3 accepts either name: `isEffectWithinVocabulary` passes when `allowedActions` contains the action type **or** the command ID. Gates 1 and 2 are the demo-killers.
 
 ### Scope derivation
 
-`tenantId` and `organizationId` come **only** from the command runtime context (`ctx.auth.tenantId`, `ctx.selectedOrganizationId ?? ctx.auth.orgId`) and fail closed when absent. `action.payload` originates from a language model and is treated as hostile: the input schema is non-strict so unknown keys are **stripped** rather than rejected, following `src/modules/deal_links/commands/document-links.ts:8-17`. A payload carrying `tenantId` cannot reach the write path.
+`tenantId` and `organizationId` come **only** from the command runtime context (`ctx.auth.tenantId`, `ctx.selectedOrganizationId ?? ctx.auth.orgId`) and fail closed when absent. `action.payload` originates from a language model and is treated as hostile: the input schema is non-strict so unknown keys are **stripped**, following `src/modules/deal_links/commands/document-links.ts:8-17`. A payload carrying `tenantId` cannot reach the write path.
 
-`dealId` is accepted but never trusted: the deal is re-read within the derived scope, and a miss is a 404 with no write. This mirrors `src/modules/rfq_intake/inbox-actions.ts:102`, which calls `customers.deals.create` rather than touching `customer_deals` directly.
+`dealId` is accepted but never trusted: the deal is re-read within the derived scope, and a miss is a 404 with no write. This mirrors `src/modules/rfq_intake/inbox-actions.ts:102`.
+
+## 📝 Geometry Resolution
+
+All of it is closed-form. The agent contributes nothing to this section.
+
+### The pixel bridge
+
+V2 coordinates are normalized to `[0,1]` against the image, so pixels are recovered by multiplication, and `drawing.calibrations[]` supplies the only usable scale — each entry carries `start{x,y}`, `end{x,y}` and `realLength { value, unit }`:
+
+```text
+d_px     = hypot( (end.x − start.x)·imageWidthPx , (end.y − start.y)·imageHeightPx )
+m_per_px = realLength_in_metres / d_px
+```
+
+`drawing.declaredScale` is **not** usable arithmetic: it carries only `sourceText`, `evidence` and `confidence`, with no numeric field. A printed "1:50" would additionally require the physical print size, which a rendered page PNG does not carry. With `calibrations[]` empty there is no bridge at all, and only `printed` values remain usable.
+
+### Quantity per basis
+
+| Basis | Resolution order |
+|---|---|
+| `floor_area` | `floor.printedArea` when non-null, `eligible`, and `basis ∈ {gross, net}` → otherwise shoelace over `floor.outerBoundary` minus each `floor.holes[].boundary`, scaled by `m_per_px²` |
+| `gross_wall_area` | `Σ walls[] ( length × height )` |
+| `net_wall_area` | `gross_wall_area − Σ openings[] ( width × height )`, openings matched to walls by `wallId` |
+| `count` | supplied by the agent, except doors and windows — see below |
+
+Shoelace over a normalized boundary, converted:
+
+```text
+A_norm = ½ · | Σ (xᵢ·yᵢ₊₁ − xᵢ₊₁·yᵢ) |
+A_m²   = A_norm · imageWidthPx · imageHeightPx · m_per_px²
+```
+
+Ceiling area equals floor area geometrically, so a service covering walls **and** ceilings — `REN-FIN-01` is literally *"Malowanie ścian i sufitów"* — is quoted as one line whose quantity is `net_wall_area + floor_area` over the same rooms.
+
+Wall length comes from `walls[].length` when present and is otherwise derived from `start`/`end` through the same bridge. Opening widths follow the same rule.
+
+### What geometry cannot supply
+
+A plan view has no vertical axis. Wall heights (`startHeight`, `endHeight`), `drawing.globalCeilingHeight`, `openings[].height` and `sillHeight` are **not derivable by any formula** and must come from a printed label or the global value. V2 names these failures directly as `ceiling_height_missing` and `opening_height_missing`. Consequently wall widths are always computable while wall *areas* are not: without a height, the item goes to review rather than into a quote.
+
+### Re-deriving the model's own arithmetic
+
+Every V2 measurement carries `method: 'printed' | 'scale_derived'`. A `scale_derived` value was computed by the model, and `realLength.calibrationId` records which calibration it used. The command recomputes every `scale_derived` value from `start`/`end` and compares; a disagreement beyond tolerance drops the item with a warning. Two or more calibrations are cross-checked against each other the same way. This costs nothing beyond the function the bases above already require, and it is the cheapest available guard against a model that multiplied wrong.
+
+### Eligibility is a gate, not advice
+
+`analysisStatus ∈ {not_floor_plan, unreadable}` yields no items. Any `calculationEligibility: 'review_required'` on a value the item depends on, or a relevant `readiness` flag that is not `eligible`, drops that item. Warnings quote V2's own `missingInputs.code` values (`scale_missing`, `floor_boundary_incomplete`, `ceiling_height_missing`, `height_scope_ambiguous`, `wall_length_missing`, `opening_width_missing`, `opening_height_missing`, `opening_wall_ambiguous`) rather than inventing strings.
 
 ## 📝 Data Model
 
-No new entities and no migration. This slice persists nothing of its own: the quote is a Sales record, and correlation travels in the quote's free-form `metadata`.
+No new entities and no migration. The quote is a Sales record and correlation travels in its free-form `metadata`.
 
-The consequence is stated plainly: **there is no idempotency record, so two invocations create two quotes.** This is an accepted hackathon shortcut, recorded in code as `// HACK(hackathon):`, not an oversight. The approved RFQ spec's `RfqQuoteDraftOperation` remains the durable answer when one is needed.
+**There is no idempotency record, so two invocations create two quotes.** An accepted hackathon shortcut, recorded in code as `// HACK(hackathon):`, not an oversight.
 
 ## 📝 API Contracts
 
-### Input — the agent-facing shape
+### Input — optimised for the agent
+
+Flat, one enum, no nesting, and no number the model has to compute:
 
 ```ts
 {
-  dealId: uuid,                 // untrusted; re-read in derived scope
+  dealId: uuid,                    // untrusted; re-read in derived scope
+  roomMeasurementsRunId: uuid,     // the V2 AgentRun this references; re-read in scope
   items: [{
-    catalogProductId: uuid,     // the agent's semantic mapping: work -> service
-    variantId?: uuid,           // chosen from the list supplied in the agent's prompt
-    note?: string,              // becomes the line description
-    measurement: Measurement
+    catalogProductId: uuid,
+    variantId?: uuid,              // from the list supplied in the agent's prompt
+    basis: 'floor_area' | 'gross_wall_area' | 'net_wall_area' | 'count' | 'given',
+    roomIds?: string[],            // V2 room ids; required for the three area bases
+    count?: number,                // required for basis 'count'
+    given?: { value: number, unit: 'm2' | 'mb' | 'szt' | 'kpl' },   // required for basis 'given'
+    note?: string                  // becomes the line description
   }]
 }
 ```
 
-No `currencyCode`, no price field, no `customerEntityId`, no `channelId`, no scope keys. Those are derived, never accepted.
+A flat object with one discriminating enum is deliberate. A nested union validates more tightly but forces the model to choose a shape before it has chosen a meaning; here it picks one word and fills the field that word implies, and the command rejects invalid combinations.
 
-`variantId` is optional: omitted, the command falls back to the product's `isDefault` variant, which the seed sets for all 46 services. A `variantId` belonging to a **different** product is always a rejection of that item, never a substitution.
+`roomIds` are V2 `rooms[].id` values. The agent's prompt lists each room as `id`, `printedName` and `location` so it can choose exactly, without name matching.
 
-### `Measurement`
+`basis: 'given'` is the escape hatch for a brief that states a quantity in prose with no floor plan behind it. It is the only place a number reaches the command from the model, and it carries its unit explicitly.
 
-```ts
-const metres = z.number().positive().max(100)          // upper bound catches cm/m confusion
+The schema is non-strict: unknown keys are stripped. There is no `currencyCode`, no price field, no `customerEntityId`, no `channelId` and no scope key — those are derived, never accepted.
 
-const surface = z.union([
-  z.object({ width: metres, height: metres, label: z.string().max(120).optional() }),
-  z.object({ area: z.number().positive().max(10_000), label: z.string().max(120).optional() }),
-])
+`variantId` is optional; omitted, the command falls back to the product's `isDefault` variant, which the seed sets for all 46 services. A `variantId` belonging to a **different** product is always a rejection of that item, never a substitution.
 
-const deduction = z.union([
-  z.object({ width: metres, height: metres, count: z.number().int().positive().max(200).default(1),
-             label: z.string().max(120).optional() }),
-  z.object({ area: z.number().positive().max(10_000), count: z.number().int().positive().max(200).default(1),
-             label: z.string().max(120).optional() }),
-])
+### The unit gate
 
-const measurement = z.discriminatedUnion('kind', [
-  z.object({
-    kind: z.literal('area'),
-    surfaces: z.array(surface).min(1).max(100),
-    deductions: z.array(deduction).max(100).default([]),
-  }),
-  z.object({
-    kind: z.literal('length'),
-    segments: z.array(z.object({ length: metres, label: z.string().max(120).optional() })).min(1).max(100),
-  }),
-  z.object({
-    kind: z.literal('count'),
-    count: z.number().int().positive().max(10_000),
-  }),
-])
-```
+Each basis produces a unit, which must match the Catalog product's `defaultUnit`:
 
-### Quantity derivation and the unit gate
+| Basis | Produces |
+|---|---|
+| `floor_area`, `gross_wall_area`, `net_wall_area` | `m2` |
+| `count` | `szt` or `kpl` |
+| `given` | whatever `given.unit` declares |
 
-| `kind` | Quantity | Accepted `defaultUnit` |
-|---|---|---|
-| `area` | `Σ surfaces − Σ (deduction × count)`, rounded to 2 decimals, clamped at zero | `m2` |
-| `length` | `Σ length` | `mb` |
-| `count` | `count` | `szt`, `kpl` |
+A mismatch drops the item. This is the core semantic check: `REN-CAR-01` (montaż drzwi, `szt`) mapped with `basis: 'floor_area'` cannot reach a quote.
 
-Three kinds cover all 46 seeded services. Two design calls carry the weight:
+### Door and window counts are derived, not supplied
 
-**One `area` kind, not `wall_area` + `floor_area`.** `REN-FIN-01` is *"Malowanie ścian i sufitów"* — one product, therefore one quote line, therefore one quantity that must sum walls **and** ceiling. Split kinds leave the agent nowhere to put that, and force it to decide whether a ceiling is a wall or a floor: a question with no correct answer, which would produce random misclassification. A single `area` kind with `label` carrying "ściana północna" or "sufit" removes the decision.
-
-**`{ area }` beside `{ width, height }`.** Briefs state "mieszkanie 68 m²" far more often than they enumerate wall dimensions. Without the direct form, an agent that already knows the number must invent dimensions to express it — precisely the fabrication this design exists to prevent.
-
-**`count` maps to two units.** `szt` and `kpl` differ in billing vocabulary, not in how they are counted, so the gate is set membership, not equality.
+`openings[].kind` is `door | window | opening | unknown`. Counts for door and window services — `REN-CAR-01`, `REN-CAR-02`, `REN-CAR-03` — are therefore computed from the V2 result over the referenced rooms, and a supplied `count` for those products is compared against the derived value rather than trusted. Sockets and lighting points do not appear on a plan view and remain agent-supplied.
 
 ### Output
 
@@ -172,65 +201,99 @@ Three kinds cover all 46 seeded services. Two design calls carry the weight:
 { quoteId: string | null, lineCount: number, warnings: string[] }
 ```
 
-`quoteId` is `null` when no item survives validation; nothing is created in that case.
+`quoteId` is `null` when no item survives; nothing is created in that case.
 
 ### Downstream call
 
 `sales.quotes.create` (`node_modules/@open-mercato/core/src/modules/sales/commands/documents.ts:4713`, schema `sales/data/validators.ts:741`) returns `{ quoteId }`. It requires `tenantId`, `organizationId` and `currencyCode`; `quoteNumber` is optional and self-generates through `salesDocumentNumberGenerator`, so this slice does not reserve one. Payload scope is verified against the runtime context by `ensureQuoteScope` (`documents.ts:4740`) — checked, never trusted.
 
-Lines are emitted as `kind: 'service'` with `quantity`, `quantityUnit`, `unitPriceGross`, `taxRateId`, `priceMode: 'gross'`, `name` from the product title, `description` from the item `note`, and a `catalogSnapshot`. Gross pricing is not a choice: the seed writes `unitPriceGross` with a VAT 8% `taxRateId`. Quote `metadata` carries `{ rfqDealId, source: 'rfq_intake' }`.
+Lines are emitted as `kind: 'service'` with `quantity`, `quantityUnit`, `unitPriceGross`, `taxRateId`, `priceMode: 'gross'`, `name` from the product title, `description` from the item `note`, and a `catalogSnapshot`. Gross pricing is not a choice: the seed writes `unitPriceGross` with a VAT 8% `taxRateId`. Quote `metadata` carries `{ rfqDealId, roomMeasurementsRunId, source: 'rfq_intake' }`.
+
+## 📝 Temporary Probe Agent
+
+`rfq_intake.quote_probe` exists to exercise the five gates and the `executeProposal` path end to end **before the real mapping agent exists**. It is disposable and this spec says so in the agent's own description, so nobody mistakes it for product.
+
+- It emits exactly one proposal option carrying one action of type `rfq.quote.create`, whose payload is the input contract above.
+- It performs **no mapping and no measurement**: it forwards a payload it is handed. Keeping the model out of the loop is the point — a probe that also guesses would not tell you whether a failure came from the plumbing or from the guess.
+- `allowedActions: ['rfq_intake.quote.create']` — the narrowest declaration that satisfies gate 3.
+- `onResult.autoApproveThreshold` is set so runs auto-approve without a human. **This is a test-only setting**, stated here because the same field on a real agent is a safety boundary.
+- It ships behind the same enterprise agent flags as the rest of `rfq_intake`, which default to off.
+
+**Removal condition, recorded so it does not become permanent:** the probe is deleted in the slice that introduces the real mapping agent. Until then it carries `// HACK(hackathon):` naming that condition.
+
+What the probe proves, in order: the command is in the vocabulary (gates 1–2), the agent's narrowing admits it (gate 3), the map resolves (gate 4), the vocabulary loads (gate 5), and the resulting quote appears in Sales with the expected lines.
 
 ## 📝 UI/UX
 
-No new page and no new component. A successful run produces an ordinary unsent Sales quote; operators edit lines, dates, customer, channel and prices in the existing Sales quote detail, and the existing **Send quote** action remains the only approval boundary. Warnings from dropped items are returned by the command and surfaced by the caller.
+No new page and no new component. A successful run produces an ordinary unsent Sales quote; operators edit lines, dates, customer, channel and prices in the existing Sales quote detail, and the existing **Send quote** action remains the only approval boundary.
 
 ## 📝 Edge Cases & Failure Scenarios
 
-Every per-item failure drops that item with a bounded warning and lets the rest proceed. Only scope and deal failures abort the command.
+Per-item failures drop the item with a bounded warning and let the rest proceed. Only scope, deal and run failures abort the command.
 
 | Situation | Behavior |
 |---|---|
-| Missing tenant or organization in context | Command fails closed; nothing written |
+| Missing tenant or organization in context | Fails closed; nothing written |
 | `dealId` absent from derived scope | 404; no write |
-| Payload carries scope keys | Stripped by the schema before validation |
+| `roomMeasurementsRunId` absent from scope or not accepted | Command aborts; no quote |
+| `analysisStatus` is `not_floor_plan` or `unreadable` | No items; no quote |
+| Payload carries scope keys | Stripped before validation |
+| `roomIds` names a room absent from the run | Item dropped with warning |
+| `calibrations[]` empty and the value needed is not `printed` | Item dropped, warning `scale_missing` |
+| Wall height unavailable | Item dropped, warning `ceiling_height_missing` |
+| `printedArea.basis` is `unknown` | Falls back to the polygon; if that fails, item dropped |
+| `scale_derived` value disagrees with our recomputation | Item dropped with warning |
+| Two calibrations disagree beyond tolerance | Item dropped with warning |
+| Any dependent value is `review_required` | Item dropped with its `missingInputs` code |
+| Supplied `count` disagrees with derived door/window count | Derived value wins; warning records the difference |
 | Product not found in scope | Item dropped with warning |
 | `variantId` omitted | Falls back to the product's `isDefault` variant |
 | `variantId` belongs to another product | Item dropped; never substituted |
-| Computed unit ≠ product `defaultUnit` | Item dropped with warning — the core semantic check |
-| Deductions exceed surfaces | Quantity clamped at zero, therefore dropped as non-positive |
-| Dimension given in centimetres | Rejected by `metres.max(100)` before it can reach pricing |
+| Basis unit ≠ product `defaultUnit` | Item dropped with warning |
 | No price row for the variant in the resolved currency | Item dropped with warning |
 | Resolved price row points at a different variant | Item dropped; never substituted |
-| Lines resolve to mixed currencies | Outliers dropped; the majority currency is used |
-| Zero items survive | `quoteId: null`, no quote created, warnings returned |
+| Lines resolve to mixed currencies | Outliers dropped; majority currency used |
+| Zero items survive | `quoteId: null`, no quote created |
 | Deal has no linked customer | Quote created without `customerEntityId` (optional in Sales) |
 | Command invoked twice | Two quotes — see Data Model; accepted shortcut |
 
 ## 📝 Risks & Impact Review
 
-**Blast radius.** Additive only: one new command ID, one new workflow-safe registration, one new workflow step. No installed module is modified, no cross-module ORM relation is added, no shipped migration is touched. Cross-module access is by scalar ID and owner-command call throughout.
+**Blast radius.** Additive: one command ID, one workflow-safe registration, one bridge command, one temporary agent. No installed module is modified, no cross-module ORM relation is added, no shipped migration is touched.
 
-**Contract surface.** `rfq_intake.quote.create` is a new command ID rather than a change to an existing one, so nothing existing breaks. Registering it as workflow-safe widens the agent action vocabulary by exactly one entry, and only for tenants that then enable it.
+**Dependency risk.** The command is unusable until PR #35 lands, since it reads the V2 result. The geometry reducer is a pure function over that contract and can be written and tested against fixtures before the merge.
 
-**Rollback.** Remove the workflow step and the workflow-safe registration; the command becomes unreachable and no data migration is needed. Quotes already produced are ordinary Sales quotes and are deleted or voided through Sales.
+**Contract surface.** A new command ID rather than a change to an existing one. Registering it as workflow-safe widens the agent action vocabulary by exactly one entry, and only for tenants that enable it.
 
-**Principal risk — the two enablement gates.** Gates 1 and 2 above fail silently as `skipped`. The mitigation is that `apply_proposal` surfaces every non-`ok` result from `executeProposal` as a visible warning rather than discarding it.
+**Rollback.** Remove the bridge step, the registration and the probe agent; the command becomes unreachable and no data migration is needed. Quotes already produced are ordinary Sales quotes.
 
-**Deliberate non-goal.** Linking the created quote to the deal through `deal_links.document_links.create` is out of scope here and belongs to the slice that wires the workflow.
+**Principal risk — the two enablement gates.** Gates 1 and 2 fail silently as `skipped`. Mitigation: the bridge surfaces every non-`ok` result from `executeProposal` as a visible warning.
+
+**Second risk — the probe outliving its purpose.** Mitigated by the stated removal condition and the auto-approve setting being labelled test-only.
+
+**Deliberate non-goal.** Linking the quote to the deal through `deal_links.document_links.create` belongs to the slice that wires the workflow.
 
 ## 📋 Phasing
 
-One independently shippable phase. The command and its pure arithmetic are useful and testable before any agent exists, and the invocation path is specified so the next slice can wire it without re-deriving the mechanism.
+**Phase 1** is the arithmetic and the command, testable against fixtures with no agent and no merge dependency. **Phase 2** is the invocation path and the probe, which needs PR #35.
 
 ## 📋 Implementation Plan
 
-**Phase 1 — the command and its arithmetic**
+**Phase 1 — geometry and the command**
 
-1. `src/modules/rfq_intake/lib/measurements.ts` — pure quantity functions and the `kind → accepted units` map. No I/O. Unit tests cover surfaces minus deductions, the `{ area }` form, clamping at zero, rounding, summed segments, counts, and the centimetre guard.
-2. `src/modules/rfq_intake/commands/quote-create.ts` — the input schema and handler, following `deal_links/commands/document-links.ts`. Tests cover a foreign deal, stripped scope keys, a variant from another product, the `isDefault` fallback, a unit mismatch, a missing price, mixed currencies, zero surviving items, and the happy path.
-3. Register `rfq_intake.quote.create` through `registerWorkflowSafeCommands` alongside the three existing entries, with `requiredFeatures: ['customers.deals.manage', 'sales.quotes.manage']`.
-4. Run `yarn generate && yarn typecheck && yarn lint`, then the focused tests.
+1. `src/modules/rfq_intake/lib/geometry.ts` — the pixel bridge, shoelace with holes, wall and opening sums, unit normalization, calibration cross-check, and `scale_derived` re-derivation. No I/O. Tests use V2-shaped fixtures: a printed area, a rectangular polygon, an L-shaped polygon with a hole, a room with no calibration, disagreeing calibrations, a `scale_derived` value that does not reproduce, and a missing ceiling height.
+2. `src/modules/rfq_intake/lib/basisResolver.ts` — basis → quantity and unit over a set of rooms, including derived door and window counts.
+3. `src/modules/rfq_intake/commands/quote-create.ts` — the input schema and handler, following `deal_links/commands/document-links.ts`. Tests cover a foreign deal, a foreign run, stripped scope keys, every row of the edge-case table that the command owns, and the happy path.
+4. Register `rfq_intake.quote.create` through `registerWorkflowSafeCommands` with `requiredFeatures: ['customers.deals.manage', 'sales.quotes.manage']`.
+5. `yarn generate && yarn typecheck && yarn lint`, then the focused tests.
 
-Each step leaves the application working: after step 2 the command exists and is callable from tests; step 3 only makes it reachable.
+**Phase 2 — the invocation path and the probe** *(needs PR #35)*
 
-**Out of scope, named so the next slice can pick them up:** the `apply_proposal` bridge command, the proposal agent itself, the workflow step, the `deal_links` call, and any durable idempotency record.
+6. `src/modules/rfq_intake/commands/apply-proposal.ts` — loads the scoped disposed `AgentProposal`, reads `selectedOptionId`, calls `executeProposal` with `actionCommandMap`, and surfaces every non-`ok` result as a warning.
+7. `rfq_intake.quote_probe` — the temporary agent, its `allowedActions`, its test-only auto-approve setting, and the `HACK(hackathon)` note naming its removal condition.
+8. The workflow step that runs the bridge after the agent step.
+9. End-to-end run proving all five gates, with the tenant enablement performed explicitly and recorded.
+
+Each step leaves the application working: after step 3 the command exists and is callable from tests; step 4 only makes it reachable; the probe is additive and flag-gated.
+
+**Out of scope, named so the next slice can pick them up:** the real mapping agent, the `deal_links` call, and any durable idempotency record.
