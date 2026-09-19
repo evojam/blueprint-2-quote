@@ -3,6 +3,7 @@ import { z } from 'zod'
 const MAX_ROOMS = 100
 const MAX_CALIBRATIONS = 20
 const MAX_WALLS = 128
+const MAX_BOUNDARY_VERTICES = MAX_WALLS
 const MAX_OPENINGS = 64
 const MAX_HOLES = 32
 const MAX_WARNINGS = 100
@@ -93,7 +94,7 @@ const candidateCalibrationSchema = z
 const candidateHoleSchema = z
   .object({
     id: idSchema,
-    boundary: z.array(imagePointSchema),
+    boundary: z.array(imagePointSchema).max(MAX_BOUNDARY_VERTICES),
   })
   .strict()
 
@@ -130,7 +131,7 @@ const candidateRoomSchema = z
     location: sourceTextSchema,
     floor: z
       .object({
-        outerBoundary: z.array(imagePointSchema),
+        outerBoundary: z.array(imagePointSchema).max(MAX_BOUNDARY_VERTICES),
         holes: z.array(candidateHoleSchema).max(MAX_HOLES),
         printedArea: candidateAreaMeasurementSchema.nullable(),
       })
@@ -230,7 +231,7 @@ const roomSchema = candidateRoomSchema
   .extend({
     floor: z
       .object({
-        outerBoundary: z.array(imagePointSchema),
+        outerBoundary: z.array(imagePointSchema).max(MAX_BOUNDARY_VERTICES),
         holes: z.array(holeSchema).max(MAX_HOLES),
         printedArea: areaMeasurementSchema.nullable(),
         calculationEligibility: eligibilitySchema,
@@ -468,6 +469,15 @@ function validateRoomTopology(room: CandidateRoom, roomIndex: number, issues: Se
   const outer = room.floor.outerBoundary
   const floorPath = `$.rooms[${roomIndex}].floor`
   if (outer.length > 0) validateCompleteRing(outer, `${floorPath}.outerBoundary`, issues)
+  if (room.floor.holes.length > 0 && outer.length < 3) {
+    issues.push(
+      issue(
+        'invalid_topology',
+        `${floorPath}.holes`,
+        'A room cannot contain holes without a complete outer boundary',
+      ),
+    )
+  }
 
   for (let holeIndex = 0; holeIndex < room.floor.holes.length; holeIndex += 1) {
     const hole = room.floor.holes[holeIndex]
@@ -510,8 +520,8 @@ function checkUniqueIds(
   items: ReadonlyArray<{ id: string }>,
   path: string,
   issues: SemanticIssue[],
+  seen = new Set<string>(),
 ): void {
-  const seen = new Set<string>()
   items.forEach((item, index) => {
     if (seen.has(item.id)) {
       issues.push(issue('duplicate_id', `${path}[${index}].id`, `Duplicate ID '${item.id}'`))
@@ -549,10 +559,13 @@ function validateIdsAndReferences(candidate: RoomMeasurementCandidate, issues: S
 
   const calibrationIds = new Set(candidate.drawing.calibrations.map((item) => item.id))
   const wallOwners = new Map<string, Set<string>>()
+  const holeIds = new Set<string>()
+  const wallIds = new Set<string>()
+  const openingIds = new Set<string>()
   candidate.rooms.forEach((room, roomIndex) => {
-    checkUniqueIds(room.floor.holes, `$.rooms[${roomIndex}].floor.holes`, issues)
-    checkUniqueIds(room.walls, `$.rooms[${roomIndex}].walls`, issues)
-    checkUniqueIds(room.openings, `$.rooms[${roomIndex}].openings`, issues)
+    checkUniqueIds(room.floor.holes, `$.rooms[${roomIndex}].floor.holes`, issues, holeIds)
+    checkUniqueIds(room.walls, `$.rooms[${roomIndex}].walls`, issues, wallIds)
+    checkUniqueIds(room.openings, `$.rooms[${roomIndex}].openings`, issues, openingIds)
     for (const wallItem of room.walls) {
       const owners = wallOwners.get(wallItem.id) ?? new Set<string>()
       owners.add(room.id)
@@ -1018,9 +1031,9 @@ function finalizeRoom(
   const printedAreaEligible = room.floor.printedArea?.basis === 'net'
   const completeBoundary = room.floor.outerBoundary.length >= 3
   let floorEligible = printedAreaEligible || (completeBoundary && hasCalibration)
-  if (!printedAreaEligible && !completeBoundary) {
+  if (!completeBoundary) {
     addMissing(missingInputs, { code: 'floor_boundary_incomplete', targetId: room.id })
-    floorEligible = false
+    if (!printedAreaEligible) floorEligible = false
   } else if (!printedAreaEligible && !hasCalibration) {
     addMissing(missingInputs, { code: 'scale_missing', targetId: room.id })
     floorEligible = false
