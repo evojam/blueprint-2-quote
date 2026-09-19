@@ -451,6 +451,43 @@ file-defined agents in `docker/opencode/agents/` available to drive it.
   `opencode` (`OM_OPENCODE_WORKSPACE_ROOT`, `OM_OPENCODE_WORKSPACE_ROOT_CONTAINER`) — a
   second shared volume. Left out here deliberately; agents that only read data and submit
   outcomes do not need it.
+- **Tool search indexing fails against an SSL-only database.** Upstream bug, not an infra
+  problem. On start the MCP server logs:
+
+  ```
+  Failed to index 83 tools: vector (no pg_hba.conf entry for host "10.2.1.191", no encryption)
+  Search indexing skipped (search service not available)
+  ```
+
+  `@open-mercato/search` opens two pools of its own — `src/modules/search/di.ts:78` and
+  `src/vector/drivers/pgvector/index.ts:112` — as bare
+  `new Pool({ connectionString: dbUrl })`. Neither passes `ssl`, and the package never
+  calls `getSslConfig()` (`@open-mercato/shared/src/lib/db/ssl.ts`), which is what the
+  app's own MikroORM pool uses. With `DB_SSL=true` the main connection is encrypted and
+  these two are not, so RDS refuses them.
+
+  It is not a regression. The app container never reaches this code; `http-server.ts:444`
+  calls `indexToolsForSearch` unconditionally at MCP startup, and that startup is a path
+  this deployment ran for the first time. Note also that
+  `OM_DISABLE_VECTOR_SEARCH_AUTOINDEXING` does **not** gate it — that flag covers entity
+  auto-indexing, not tool indexing — and the `catch` misreports the cause as "search
+  service not available" when the service was available and the connection was not.
+
+  Impact is degradation, not failure: the MCP server starts, tools are served, and an
+  agent calling a tool by name works. Only `tool_search` is affected, and it can come
+  back empty.
+
+  **Workaround — keeps the feature on.** Append `?sslmode=no-verify` to `DATABASE_URL` on
+  the `mcp` container **and keep `DB_SSL=true`**. Both pools take the connection string
+  straight to `pg`, and `pg-connection-string` (2.14.0, `index.js:153`) maps `no-verify`
+  to `ssl.rejectUnauthorized = false`, so they connect encrypted without needing the RDS
+  CA bundle. `DB_SSL=true` has to stay because `getSslConfig()` matches only
+  `sslmode=require`, `ssl=true` or `DB_SSL=true` — it does not recognise `no-verify`, so
+  dropping it would silently unencrypt the app's own pool.
+
+  Do **not** use `?sslmode=require` instead: outside libpq-compat mode that enables
+  verification without supplying a CA, which fails against RDS.
+
 - **Unverified on ECS.** Everything in this section is derived from the compose
   definitions, the two entrypoints and the module sources, plus a local `linux/amd64` build
   of the `opencode` image. The four-container task has not been run on Fargate.
