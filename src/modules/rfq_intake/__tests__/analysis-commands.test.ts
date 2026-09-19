@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import type * as Zod from 'zod'
 import { beforeEach, describe, expect, it, jest } from '@jest/globals'
 
 const getArtifactBytes = jest.fn<
@@ -8,9 +9,24 @@ const getArtifactBytes = jest.fn<
 jest.mock('@/modules/property_documents/ai-tools', () => ({
   PDF_AGENT_ID: 'property_documents.pdf_intake',
 }))
-jest.mock('@/modules/property_documents/ai-agents', () => ({
-  CATALOG_MATCHER_AGENT_ID: 'property_documents.catalog_matcher',
-}))
+jest.mock('@/modules/property_documents/ai-agents', () => {
+  const { z } = jest.requireActual<typeof Zod>('zod')
+  return {
+    CATALOG_MATCHER_AGENT_ID: 'property_documents.catalog_matcher',
+    catalogMatcherGroupedResultSchema: z
+      .object({
+        kind: z.literal('research'),
+        data: z
+          .object({
+            contractVersion: z.literal(2),
+            needs: z.array(z.unknown()),
+            warnings: z.array(z.string()),
+          })
+          .strict(),
+      })
+      .strict(),
+  }
+})
 jest.mock('@open-mercato/enterprise/modules/agent_orchestrator/lib/runtime/artifactFileStore', () => ({
   getArtifactBytes: (...args: [unknown, unknown, string]) => getArtifactBytes(...args),
 }))
@@ -23,20 +39,26 @@ jest.mock('@open-mercato/shared/lib/commands', () => ({
 }))
 
 import {
-  analyzePlansCommand,
-  loadPdfIntakeArtifactSet,
+  loadPdfIntakeBrief,
   matchRequirementsCommand,
 } from '../commands/analysis'
 
 const INPUT = {
   tenantId: '11111111-1111-4111-8111-111111111111',
   organizationId: '22222222-2222-4222-8222-222222222222',
-  dealId: '33333333-3333-4333-8333-333333333333',
   workflowInstanceId: '44444444-4444-4444-8444-444444444444',
-  stepId: 'measure_plans',
+  stepId: 'match_catalog' as const,
 }
 const RUN_ID = '55555555-5555-4555-8555-555555555555'
-const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+const MATCHER_RUN_ID = '66666666-6666-4666-8666-666666666666'
+const GROUPED_RESULT = {
+  kind: 'research',
+  data: {
+    contractVersion: 2,
+    needs: [],
+    warnings: [],
+  },
+}
 
 type Artifact = {
   id: string
@@ -51,15 +73,28 @@ type Artifact = {
   deletedAt: null
 }
 
+type MatcherRun = {
+  id: string
+  tenantId: string
+  organizationId: string
+  workflowInstanceId: string
+  stepId: string
+  agentId: string
+  status: string
+  output: unknown
+  deletedAt: null
+}
+
 type Fixture = {
-  artifacts: Artifact[]
-  bytesByFileName: Partial<Record<string, Buffer>>
-  run: {
+  briefArtifact: Artifact
+  briefBytes: Buffer
+  intakeRun: {
     id: string
     tenantId: string
     organizationId: string
     agentId: string
     workflowInstanceId: string
+    stepId: string
     status: string
     resultKind: string
     output: {
@@ -69,85 +104,110 @@ type Fixture = {
     }
     deletedAt: null
   }
+  matcherRuns: MatcherRun[]
+  runtimeResult: unknown
 }
 
 function sha256(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
-function artifact(fileName: string, bytes: Buffer): Artifact {
+function makeArtifact(bytes: Buffer): Artifact {
   return {
-    id: `artifact-${fileName}`,
+    id: 'artifact-brief',
     tenantId: INPUT.tenantId,
     organizationId: INPUT.organizationId,
     runId: RUN_ID,
-    fileName,
-    mimeType: fileName.endsWith('.png') ? 'image/png' : 'application/json',
+    fileName: 'brief.json',
+    mimeType: 'application/json',
     fileSize: bytes.length,
     sha256: sha256(bytes),
-    storageKey: `storage/${fileName}`,
+    storageKey: 'storage/brief.json',
     deletedAt: null,
   }
 }
 
 function makeFixture(): Fixture {
-  const bytesByFileName: Partial<Record<string, Buffer>> = {
-    'brief.json': Buffer.from(`${JSON.stringify({ brief: 'Exact raw text\f' })}\n`),
-    'pdf-pages.json': Buffer.from(
-      `${JSON.stringify({
-        pageCount: 2,
-        files: ['pdf-page-0001.png', 'pdf-page-0002.png'],
-      })}\n`,
-    ),
-    'pdf-page-0001.png': PNG,
-    'pdf-page-0002.png': PNG,
+  const briefBytes = Buffer.from(`${JSON.stringify({ brief: 'Exact raw text\f' })}\n`)
+  return {
+    briefArtifact: makeArtifact(briefBytes),
+    briefBytes,
+    intakeRun: {
+      id: RUN_ID,
+      tenantId: INPUT.tenantId,
+      organizationId: INPUT.organizationId,
+      agentId: 'property_documents.pdf_intake',
+      workflowInstanceId: INPUT.workflowInstanceId,
+      stepId: 'extract_pdf',
+      status: 'ok',
+      resultKind: 'artifact',
+      output: {
+        kind: 'artifact',
+        artifacts: [
+          { fileName: 'brief.json', mimeType: 'application/json' },
+          { fileName: 'pdf-pages.json', mimeType: 'application/json' },
+        ],
+        summary: 'Extracted the raw PDF text and rendered every page.',
+      },
+      deletedAt: null,
+    },
+    matcherRuns: [],
+    runtimeResult: GROUPED_RESULT,
   }
-  const artifacts = Object.entries(bytesByFileName).map(([fileName, bytes]) => {
-    if (!bytes) throw new Error(`missing fixture bytes for ${fileName}`)
-    return artifact(fileName, bytes)
-  })
-  const run = {
-    id: RUN_ID,
+}
+
+function makeMatcherRun(overrides: Partial<MatcherRun> = {}): MatcherRun {
+  return {
+    id: MATCHER_RUN_ID,
     tenantId: INPUT.tenantId,
     organizationId: INPUT.organizationId,
-    agentId: 'property_documents.pdf_intake',
     workflowInstanceId: INPUT.workflowInstanceId,
+    stepId: 'match_catalog',
+    agentId: 'property_documents.catalog_matcher',
     status: 'ok',
-    resultKind: 'artifact',
-    output: {
-      kind: 'artifact',
-      artifacts: [
-        { fileName: 'brief.json', mimeType: 'application/json' },
-        { fileName: 'pdf-pages.json', mimeType: 'application/json' },
-      ],
-      summary: 'Extracted the raw PDF text and rendered every page.',
-    },
+    output: GROUPED_RESULT,
     deletedAt: null,
+    ...overrides,
   }
-  return { artifacts, bytesByFileName, run }
 }
 
 function buildCtx(fixture: Fixture = makeFixture()) {
   let artifactWhere: Record<string, unknown> | null = null
+  let matcherWhere: Record<string, unknown> | null = null
+  const agentRuntime = {
+    run: jest.fn(async () => fixture.runtimeResult),
+  }
   const em = {
     fork: () => em,
-    findOne: async (_entity: unknown, where: Record<string, unknown>) =>
-      'agentId' in where ? fixture.run : null,
-    find: async (_entity: unknown, where: Record<string, unknown>) => {
+    findOne: async (_entity: unknown, where: Record<string, unknown>) => {
+      if ('agentId' in where) return fixture.intakeRun
       artifactWhere = where
-      return fixture.artifacts
+      return fixture.briefArtifact
+    },
+    find: async (_entity: unknown, where: Record<string, unknown>) => {
+      matcherWhere = where
+      return fixture.matcherRuns.filter(
+        (run) =>
+          run.tenantId === where.tenantId &&
+          run.organizationId === where.organizationId &&
+          run.workflowInstanceId === where.workflowInstanceId &&
+          run.stepId === where.stepId &&
+          run.agentId === where.agentId &&
+          run.status === where.status &&
+          run.deletedAt === where.deletedAt,
+      )
     },
   }
   const container = {
     resolve: (name: string) => {
       if (name === 'em') return em
+      if (name === 'agentRuntime') return agentRuntime
       throw new Error(`unexpected resolve ${name}`)
     },
   }
-  getArtifactBytes.mockImplementation(async (_container, _scope, storageKey) => {
-    const row = fixture.artifacts.find((entry) => entry.storageKey === storageKey)
-    return row ? fixture.bytesByFileName[row.fileName] ?? null : null
-  })
+  getArtifactBytes.mockImplementation(async (_container, _scope, storageKey) =>
+    storageKey === fixture.briefArtifact.storageKey ? fixture.briefBytes : null,
+  )
   return {
     ctx: {
       container,
@@ -158,132 +218,111 @@ function buildCtx(fixture: Fixture = makeFixture()) {
       },
       selectedOrganizationId: INPUT.organizationId,
     } as never,
-    em: em as never,
+    agentRuntime,
     get artifactWhere() {
       return artifactWhere
+    },
+    get matcherWhere() {
+      return matcherWhere
     },
   }
 }
 
-async function load(fixture: Fixture = makeFixture()) {
-  const harness = buildCtx(fixture)
-  const result = await loadPdfIntakeArtifactSet(harness.em, harness.ctx, INPUT)
-  return { ...harness, result }
-}
-
-describe('loadPdfIntakeArtifactSet', () => {
+describe('loadPdfIntakeBrief', () => {
   beforeEach(() => {
     getArtifactBytes.mockReset()
   })
 
-  it('returns exact raw brief text and ordered page artifact identities after scoped validation', async () => {
-    const loaded = await load()
-
-    expect(loaded.result).toEqual({
+  it('returns only the exact raw brief after scoped validation', async () => {
+    const harness = buildCtx()
+    await expect(loadPdfIntakeBrief((harness.ctx.container.resolve('em') as never), harness.ctx, INPUT)).resolves.toEqual({
       runId: RUN_ID,
       brief: 'Exact raw text\f',
-      pages: [
-        {
-          sourcePage: 1,
-          artifactId: 'artifact-pdf-page-0001.png',
-          fileName: 'pdf-page-0001.png',
-        },
-        {
-          sourcePage: 2,
-          artifactId: 'artifact-pdf-page-0002.png',
-          fileName: 'pdf-page-0002.png',
-        },
-      ],
     })
-    expect(loaded.artifactWhere).toEqual({
+    expect(harness.artifactWhere).toEqual({
       tenantId: INPUT.tenantId,
       organizationId: INPUT.organizationId,
       runId: RUN_ID,
+      fileName: 'brief.json',
+      deletedAt: null,
+    })
+    expect(getArtifactBytes).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['foreign artifact scope', (fixture: Fixture) => { fixture.briefArtifact.tenantId = '99999999-9999-4999-8999-999999999999' }, 'artifact scope mismatch'],
+    ['wrong brief MIME', (fixture: Fixture) => { fixture.briefArtifact.mimeType = 'application/octet-stream' }, 'invalid artifact metadata'],
+    ['SHA mismatch', (fixture: Fixture) => { fixture.briefArtifact.sha256 = 'a'.repeat(64) }, 'invalid artifact metadata'],
+    ['malformed brief JSON', (fixture: Fixture) => { fixture.briefBytes = Buffer.from('{') }, 'invalid brief.json'],
+    ['empty brief', (fixture: Fixture) => { fixture.briefBytes = Buffer.from(JSON.stringify({ brief: '' })) }, 'invalid brief.json'],
+    ['oversized brief', (fixture: Fixture) => { fixture.briefBytes = Buffer.from(JSON.stringify({ brief: 'a'.repeat(65_537) })) }, 'invalid brief.json'],
+  ])('rejects %s before runtime handoff', async (_name, mutate, message) => {
+    const fixture = makeFixture()
+    mutate(fixture)
+    if (fixture.briefBytes.length !== fixture.briefArtifact.fileSize && message !== 'invalid artifact metadata') {
+      fixture.briefArtifact = makeArtifact(fixture.briefBytes)
+    }
+    const harness = buildCtx(fixture)
+
+    await expect(matchRequirementsCommand.execute(INPUT, harness.ctx)).rejects.toThrow(message)
+    expect(harness.agentRuntime.run).not.toHaveBeenCalled()
+  })
+})
+
+describe('matchRequirementsCommand', () => {
+  beforeEach(() => {
+    getArtifactBytes.mockReset()
+  })
+
+  it('hands the verified raw brief to the matcher with workflow scope', async () => {
+    const harness = buildCtx()
+
+    await expect(matchRequirementsCommand.execute(INPUT, harness.ctx)).resolves.toEqual(GROUPED_RESULT)
+    expect(harness.agentRuntime.run).toHaveBeenCalledWith(
+      'property_documents.catalog_matcher',
+      {
+        mode: 'grouped',
+        text: 'Exact raw text\f',
+        maxNeeds: 40,
+        limitPerNeed: 5,
+      },
+      expect.objectContaining({
+        tenantId: INPUT.tenantId,
+        organizationId: INPUT.organizationId,
+        workflowInstanceId: INPUT.workflowInstanceId,
+        stepId: 'match_catalog',
+        invocationId: expect.any(String),
+      }),
+    )
+  })
+
+  it('reuses only a prior grouped-v2 success', async () => {
+    const fixture = makeFixture()
+    fixture.matcherRuns = [makeMatcherRun()]
+    const harness = buildCtx(fixture)
+
+    await expect(matchRequirementsCommand.execute(INPUT, harness.ctx)).resolves.toEqual(GROUPED_RESULT)
+    expect(harness.agentRuntime.run).not.toHaveBeenCalled()
+    expect(harness.matcherWhere).toMatchObject({
+      tenantId: INPUT.tenantId,
+      organizationId: INPUT.organizationId,
+      workflowInstanceId: INPUT.workflowInstanceId,
+      stepId: 'match_catalog',
+      agentId: 'property_documents.catalog_matcher',
+      status: 'ok',
       deletedAt: null,
     })
   })
 
-  it('rejects a missing captured artifact', async () => {
-    const fixture = makeFixture()
-    fixture.artifacts.pop()
-    await expect(load(fixture)).rejects.toThrow('artifact set mismatch')
-  })
-
-  it('rejects an extra captured artifact', async () => {
-    const fixture = makeFixture()
-    const bytes = Buffer.from('{}')
-    fixture.bytesByFileName['unexpected.json'] = bytes
-    fixture.artifacts.push(artifact('unexpected.json', bytes))
-    await expect(load(fixture)).rejects.toThrow('artifact set mismatch')
-  })
-
-  it('rejects unreadable captured bytes', async () => {
-    const fixture = makeFixture()
-    delete fixture.bytesByFileName['pdf-page-0002.png']
-    await expect(load(fixture)).rejects.toThrow('unreadable artifact')
-  })
-
-  it('rejects mistyped captured metadata', async () => {
-    const fixture = makeFixture()
-    fixture.artifacts.find((row) => row.fileName === 'pdf-page-0001.png')!.mimeType =
-      'application/octet-stream'
-    await expect(load(fixture)).rejects.toThrow('invalid artifact metadata')
-  })
-
-  it('rejects a malformed or non-contiguous page inventory', async () => {
-    const fixture = makeFixture()
-    const bytes = Buffer.from(
-      JSON.stringify({ pageCount: 2, files: ['pdf-page-0001.png', 'pdf-page-0003.png'] }),
-    )
-    fixture.bytesByFileName['pdf-pages.json'] = bytes
-    Object.assign(
-      fixture.artifacts.find((row) => row.fileName === 'pdf-pages.json')!,
-      artifact('pdf-pages.json', bytes),
-    )
-    await expect(load(fixture)).rejects.toThrow('invalid pdf-pages.json')
-  })
-
-  it('rejects bytes that do not have a PNG signature', async () => {
-    const fixture = makeFixture()
-    const bytes = Buffer.from('not a png')
-    fixture.bytesByFileName['pdf-page-0001.png'] = bytes
-    Object.assign(
-      fixture.artifacts.find((row) => row.fileName === 'pdf-page-0001.png')!,
-      artifact('pdf-page-0001.png', bytes),
-    )
-    await expect(load(fixture)).rejects.toThrow('invalid PNG artifact')
-  })
-
-  it('rejects a foreign or run-mismatched row even if persistence returns it', async () => {
-    const fixture = makeFixture()
-    fixture.artifacts[0]!.runId = '66666666-6666-4666-8666-666666666666'
-    await expect(load(fixture)).rejects.toThrow('artifact scope mismatch')
-  })
-
-  it('rejects an AgentResult that references anything except the two control files', async () => {
-    const fixture = makeFixture()
-    fixture.run.output.artifacts[1] = {
-      fileName: 'pdf-page-0001.png',
-      mimeType: 'image/png',
-    }
-    await expect(load(fixture)).rejects.toThrow('invalid AgentResult')
-  })
-})
-
-describe('deferred RFQ intake consumers', () => {
-  beforeEach(() => {
-    getArtifactBytes.mockReset()
-  })
-
   it.each([
-    ['rfq_intake.plans.analyze', analyzePlansCommand],
-    ['rfq_intake.requirements.match', matchRequirementsCommand],
-  ])('%s validates the captured set and stops before semantic work', async (_id, command) => {
-    const { ctx } = buildCtx()
+    ['legacy result', makeMatcherRun({ output: { kind: 'research', data: { matches: [], unmatchedTerms: [] } } })],
+    ['error result', makeMatcherRun({ status: 'error' })],
+  ])('does not reuse a prior %s', async (_name, matcherRun) => {
+    const fixture = makeFixture()
+    fixture.matcherRuns = [matcherRun]
+    const harness = buildCtx(fixture)
 
-    await expect(command.execute(INPUT, ctx)).rejects.toThrow(
-      '[internal] PDF_INTAKE_DOWNSTREAM_DEFERRED',
-    )
-    expect(getArtifactBytes).toHaveBeenCalledTimes(4)
+    await expect(matchRequirementsCommand.execute(INPUT, harness.ctx)).resolves.toEqual(GROUPED_RESULT)
+    expect(harness.agentRuntime.run).toHaveBeenCalledTimes(1)
   })
 })
