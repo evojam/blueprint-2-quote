@@ -25,24 +25,28 @@ type Row = Record<string, any>
  */
 function makeEm(pipelines: Row[], stages: Row[]) {
   let seq = 0
-  const persisted: Row[] = []
+  const pending: Row[] = []
   const em = {
     create(entity: unknown, data: Row) {
-      const row = { id: `generated-${++seq}`, ...data }
+      const row: Row = { ...data }
       if (entity === CustomerPipeline) pipelines.push(row)
       else stages.push(row)
+      pending.push(row)
       return row
     },
-    persist(row: Row) {
-      persisted.push(row)
+    persist(_row: Row) {},
+    // The primary key is `defaultRaw: gen_random_uuid()`, so an id appears only once
+    // the insert comes back. Handing one out at `create` would hide a caller that
+    // reads `row.id` too early.
+    async flush() {
+      for (const row of pending.splice(0)) row.id = `generated-${++seq}`
     },
-    async flush() {},
   }
   findWithDecryption.mockImplementation(async (_em, entity, where: Row) => {
     if (entity === CustomerPipeline) return pipelines
     return stages.filter((stage) => stage.pipelineId === where.pipelineId)
   })
-  return { em: em as never, persisted }
+  return { em: em as never }
 }
 
 describe('ensureRfqPipeline', () => {
@@ -62,7 +66,10 @@ describe('ensureRfqPipeline', () => {
     expect(pipelines[0].isDefault).toBe(true)
     expect(stages.map((stage) => stage.label)).toEqual(RFQ_PIPELINE_STAGES.map((stage) => stage.label))
     expect(stages.map((stage) => stage.order)).toEqual([0, 1, 2, 3, 4, 5])
-    expect(Object.keys(result.stageIds)).toHaveLength(RFQ_PIPELINE_STAGES.length)
+    // Every id must be readable by the caller: reading `row.id` before the flush
+    // returns undefined and the map looks complete while being empty.
+    expect(Object.values(result.stageIds)).toHaveLength(RFQ_PIPELINE_STAGES.length)
+    expect(Object.values(result.stageIds).every((id) => typeof id === 'string' && id.length > 0)).toBe(true)
   })
 
   it('names the closing stages in English so closure detection recognises them', () => {

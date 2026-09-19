@@ -115,7 +115,10 @@ export async function ensureRfqPipeline(em: EntityManager, scope: Scope): Promis
   }
 
   const existing = await loadStages(em, scope, pipeline.id)
-  const stageIds = {} as Record<RfqStageKey, string>
+  // Keyed rather than indexed because the ids are only readable after the flush: the
+  // primary key is `defaultRaw: gen_random_uuid()`, so a freshly created row carries
+  // no id until the insert comes back.
+  const rows = new Map<RfqStageKey, CustomerPipelineStage>()
 
   for (const [index, stage] of RFQ_PIPELINE_STAGES.entries()) {
     const found =
@@ -123,7 +126,7 @@ export async function ensureRfqPipeline(em: EntityManager, scope: Scope): Promis
       existing.find((candidate) => matchesName(candidate.label, stage.label)) ??
       null
     if (found) {
-      stageIds[stage.key] = found.id
+      rows.set(stage.key, found)
       continue
     }
     const row = em.create(CustomerPipelineStage, {
@@ -133,10 +136,13 @@ export async function ensureRfqPipeline(em: EntityManager, scope: Scope): Promis
       order: index,
     })
     em.persist(row)
-    stageIds[stage.key] = row.id
+    rows.set(stage.key, row)
   }
 
   await em.flush()
+
+  const stageIds = {} as Record<RfqStageKey, string>
+  for (const [key, row] of rows) stageIds[key] = row.id
   logger.info('RFQ pipeline ensured', { pipelineId: pipeline.id, created })
   return { pipelineId: pipeline.id, stageIds, created }
 }
