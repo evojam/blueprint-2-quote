@@ -16,11 +16,23 @@ type CommandBusLike = {
 
 type Resolver = <T = unknown>(name: string) => T
 
+/**
+ * The workflow's start context, and therefore the vocabulary every `{{context.*}}`
+ * token in `workflows.ts` may use. Flat on purpose: the agent step builds the
+ * runtime's `__files` envelope itself, so nothing here has to carry transport shape.
+ *
+ * `customerId` and `channelId` are nullable because an RFQ can arrive from an
+ * unknown sender or an inbox with no sales channel resolved. They stay PRESENT with
+ * a null value rather than being omitted — interpolation is strict, and a missing
+ * KEY fails the step while a null value passes through.
+ */
 export type RfqAnalysisInput = {
   dealId: string
   proposalId: string
   emailId: string
-  __files: { attachments: Array<{ attachmentId: string }> }
+  attachmentId: string
+  customerId: string | null
+  channelId: string | null
 }
 
 /**
