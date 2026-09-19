@@ -158,6 +158,12 @@ the other container. If the demo involves uploads, PDFs or documents, enable S3:
   `storageDriver: 'local'`. Switch each one to S3 (bucket + region, credentials source left on
   the marketplace/ambient option) in Configuration → Attachments, or uploads keep going to the
   container filesystem even with the module loaded.
+- That page needs `DEMO_MODE=false`. The default is inverted: with the variable **unset**,
+  `isPartitionSettingsLocked()` treats the app as demo, the settings page renders only a
+  "partition settings locked" banner, and `POST/PUT/DELETE /api/attachments/partitions` reject
+  writes — so there is no curl workaround either. The image now pins `DEMO_MODE=false` and
+  `SELF_SERVICE_ONBOARDING_ENABLED=false` as build-args (the root layout bakes `demoModeEnabled`
+  into the prerendered tree), but a task definition that sets `DEMO_MODE` back on re-locks it.
 
 Without this, attachments appear to work and silently vanish on the next deploy: with no `s3`
 driver registered, `StorageDriverFactory` falls back to the local driver without an error, and
