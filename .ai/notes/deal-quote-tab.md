@@ -1,6 +1,13 @@
 # Tab „quote'y" na deal detail — ustalenia z researchu
 
-Notatka z sesji researchowej. Wszystko poniżej zweryfikowane w kodzie (`node_modules/@open-mercato/core` @ zainstalowana wersja + `src/`), nie z pamięci. Nic z docelowej funkcjonalności nie jest zaimplementowane; sonda osadzania, którą to potwierdzono, została usunięta.
+> **Zaimplementowane, branch `feat/deal-document-links`.** Ta notatka jest
+> archiwalnym researchem sprzed implementacji — sekcje 1–4 poniżej pozostają
+> aktualne i przydatne, ale sekcja 5 (rekomendacja) i „Kolejność prac" opisują
+> podejście, które **nie** zostało wybrane. Docelowy projekt i plan wdrożenia:
+> `.ai/specs/2026-09-19-deal-document-links.md` oraz
+> `docs/superpowers/plans/2026-09-19-deal-document-links.md`.
+
+Notatka z sesji researchowej. Wszystko poniżej zweryfikowane w kodzie (`node_modules/@open-mercato/core` @ zainstalowana wersja + `src/`), nie z pamięci. Stan w momencie pisania: nic z docelowej funkcjonalności nie było jeszcze zaimplementowane; sonda osadzania, którą to potwierdzono, została usunięta.
 
 ## Cel
 
@@ -86,22 +93,27 @@ Filtry listy: `id`, `number`, `customerId` (`customer_entity_id`), `channelId`, 
 
 Skutek: „pobierz quote'y tego deala" przez `metadata.dealId` = lista po `customerId` → rekordy bez metadata → dociąganie każdego po `?id=` → filtr w pamięci. N+1.
 
-## 5. Rekomendacja — custom field na dealu
+## 5. Co faktycznie zbudowano (zamiast rekomendacji custom field)
 
-Odwrócić kierunek: trzymać referencję po stronie deala.
+Ta sekcja opisywała pierwotnie rekomendację „custom field na dealu" —
+**odrzuconą** na rzecz opcji z „Odrzucone alternatywy" poniżej: własnej encji
+linkującej. Powód zmiany decyzji i pełne uzasadnienie są w
+`.ai/specs/2026-09-19-deal-document-links.md`; w skrócie: encja skaluje się do
+listy linków i do wielu dokumentów na deal, czego pojedynczy custom field nie
+daje bez własnego formatu tablicy w JSON-ie.
 
-Odczyt jest darmowy — deal detail już zwraca custom fieldy:
-- `customers/api/deals/[id]/route.ts:702-719` — `loadCustomFieldValues` dla `E.customers.customer_deal`, potem `normalizeCustomFieldResponse`
-- `customers/backend/customers/deals/[id]/hooks/types.ts:55` — `customFields: Record<string, unknown>` w `DealDetailPayload`
-- payload trafia do widgetu jako `data`
+Zbudowany moduł `deal_links`:
+- jedna encja `DealDocumentLink` (`deal_id`, `document_id`, `document_kind`,
+  scope, `deleted_at`) — bez relacji ORM do `customers`/`sales`, zgodnie z
+  odrzuceniem „entity extension" i „metadata" niżej;
+- jedna komenda zapisu, `deal_links.document_links.create`;
+- jeden route HTTP (`GET`/`POST` na `api/document-links`);
+- jeden wstrzyknięty tab na deal detail (host injection z sekcji 1);
+- jeden interceptor komendy, który podąża za quote'em w order przy konwersji.
 
-Zapis jednym wywołaniem istniejącej komendy — `customers.deals.update` parsuje custom fieldy (`customers/commands/deals.ts:755` → `parseWithCustomFields`, dalej `runCrudCommandWrite({ customFields: custom })`). Klucze rozpoznawane m.in. z `customFields: {...}` / `customValues: {...}` (`shared/src/lib/crud/custom-fields.ts:190`).
-
-Definicja pola nie jest wymagana do zapisu: `validateCustomFieldValuesServer` (`entities/lib/validation.ts:5`) ma `rejectUndeclaredKeys` domyślnie `false` → nieznany klucz przechodzi i się zapisuje. Definicja potrzebna dopiero, żeby pokazać pole w formularzu deala albo po nim filtrować.
-
-Bilans: zero własnych encji, zero migracji, zero nowego API route'u. Widget czyta `data.customFields.<key>` z payloadu, który już ma, i renderuje link do `/backend/sales/quotes/<id>`. Bez fetcha.
-
-Ograniczenie: jedno pole = jeden quote; przy wielu trzymać tablicę id-ków w tym samym cf. Kierunek odwrotny (quote → deal) dalej nieobsłużony.
+Ograniczenie z pierwotnej rekomendacji („jeden quote na deal") odpada — encja
+linkująca naturalnie obsługuje wiele dokumentów na deal i (docelowo) kierunek
+quote → deal.
 
 ### Odrzucone alternatywy
 
@@ -117,11 +129,11 @@ Uwaga dla przyszłej sesji: `example` i `rfq_intake` **nie są włączone** przy
 
 Dalszy ciąg nie jest już przedmiotem tej notatki — projekt i plan wdrożenia żyją w `.ai/specs/2026-09-19-deal-document-links.md` oraz `docs/superpowers/plans/2026-09-19-deal-document-links.md`, na branchu `feat/deal-document-links`.
 
-## Kolejność prac
+## Kolejność prac (superseded)
 
-1. Tworzenie `SalesQuote` w łańcuchu RFQ (dziś nie istnieje).
-2. Zapis referencji na dealu przez `customers.deals.update` + `customFields`.
-3. Rozbudowa sondy (`deal_quote_tab`) o czytanie `data.customFields` i link do `/backend/sales/quotes/<id>` — samo osadzenie już działa.
+Ta sekcja opisywała plan pracy dla podejścia z custom fieldem (sekcja 5,
+odrzucona). Faktyczna kolejność wdrożenia — encja, komenda, route, tab,
+interceptor konwersji — jest w `docs/superpowers/plans/2026-09-19-deal-document-links.md`.
 
 ## Otwarte
 
