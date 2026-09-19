@@ -17,7 +17,6 @@ import {
   createProcessPdfTool,
   processPdfInputSchema,
   resolveSessionWorkspace,
-  validateRenderPages,
   type PdfToolRuntime,
   type RoomDimensionsVisionRuntime,
   type RoomDimensionsVisionResult,
@@ -51,7 +50,14 @@ function makeContext(agentId = PDF_AGENT_ID): McpToolContext {
   }
 }
 
-function makeRuntime(root: string, pageCount = 3): PdfToolRuntime & { calls: Array<{ file: string; args: string[] }> } {
+const RAW_TEXT = 'Brief page\fElectrical plan\fPlumbing plan\f'
+const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
+function makeRuntime(
+  root: string,
+  pageCount = 3,
+  options: { rawText?: string; failRenderPage?: number } = {},
+): PdfToolRuntime & { calls: Array<{ file: string; args: string[] }> } {
   const calls: Array<{ file: string; args: string[] }> = []
   return {
     workspaceRoot: root,
@@ -63,73 +69,22 @@ function makeRuntime(root: string, pageCount = 3): PdfToolRuntime & { calls: Arr
         return { stdout: `Pages:          ${pageCount}\nEncrypted:      no\n`, stderr: '' }
       }
       if (file === '/usr/bin/pdftotext') {
-        await writeFile(args.at(-1)!, 'Brief page\fElectrical plan\fPlumbing plan\f')
+        await writeFile(args.at(-1)!, options.rawText ?? RAW_TEXT)
         return { stdout: '', stderr: '' }
       }
       if (file === '/usr/bin/pdftoppm') {
-        const outputPrefix = args.at(-1)!
-        const selectedPageIndex = args.indexOf('-f')
-        if (selectedPageIndex >= 0) {
-          await writeFile(`${outputPrefix}.png`, 'rendered-page')
-        } else {
-          await writeFile(`${outputPrefix}-1.png`, 'preview-1')
-          await writeFile(`${outputPrefix}-2.png`, 'preview-2')
-          await writeFile(`${outputPrefix}-3.png`, 'preview-3')
-        }
+        const sourcePage = Number(args[args.indexOf('-f') + 1])
+        if (sourcePage === options.failRenderPage) throw new Error('render failed')
+        await writeFile(`${args.at(-1)!}.png`, PNG_BYTES)
         return { stdout: '', stderr: '' }
       }
       throw new Error(`unexpected executable: ${file}`)
     },
   }
 }
-function makeFinalizeInput() {
-  return {
-    operation: 'finalize',
-    brief: {
-      schemaVersion: 1,
-      source: { fileName: 'input.pdf', pageCount: 3, briefPages: [1] },
-      language: 'en',
-      title: 'Sample project',
-      summary: 'A concise project brief.',
-      sections: [{ heading: 'Scope', text: 'Prepare the plans.', sourcePages: [1] }],
 
-      requirements: [],
-      keyFacts: [],
-      unresolvedItems: [],
-      warnings: [],
-      confidence: 0.9,
-    },
-    floorPlans: {
-      schemaVersion: 1,
-      source: { fileName: 'input.pdf', pageCount: 3 },
-      plans: [
-        {
-          sourcePage: 2,
-          title: 'Electrical plan',
-          level: null,
-          primaryType: 'electrical',
-          disciplines: ['electrical'],
-          scale: null,
-          description: 'Electrical plan view.',
-          confidence: 0.95,
-          evidence: ['Plan-view symbols and circuits'],
-        },
-        {
-          sourcePage: 3,
-          title: 'Plumbing plan',
-          level: null,
-          primaryType: 'plumbing',
-          disciplines: ['plumbing'],
-          scale: null,
-          description: 'Plumbing plan view.',
-          confidence: 0.95,
-          evidence: ['Plan-view piping routes'],
-        },
-      ],
-      otherPages: [],
-      warnings: [],
-    },
-  }
+function makeFinalizeInput() {
+  return { operation: 'finalize' as const }
 }
 
 describe('property_documents.process_pdf', () => {
@@ -142,24 +97,22 @@ describe('property_documents.process_pdf', () => {
     })
   })
 
-  it('generates a read-only workspace policy with no shell or file mutation tools', async () => {
+  it('generates a no-read profile with the two-control-file outcome', async () => {
     const generated = await readFile(
       path.resolve('docker/opencode/agents/property_documents_pdf_intake.md'),
       'utf8',
     )
 
-    expect(generated).toContain('  read: true')
+    expect(generated).toContain('  read: deny')
     expect(generated).toContain('  write: deny')
     expect(generated).toContain('  edit: deny')
     expect(generated).toContain('  bash: deny')
     expect(generated).toContain('  "*": false')
     expect(generated.split('\n')).not.toContain('  "*": deny')
+    expect(generated).not.toContain('  read: true')
+    expect(generated).not.toContain('/analysis/**')
     expect(generated).not.toContain('  write: true')
     expect(generated).not.toContain('  edit: true')
-    expect(generated.indexOf('    "*": deny')).toBeLessThan(
-      generated.indexOf('    "work/*/analysis/**": allow'),
-    )
-    expect(generated).toContain('    "/home/opencode/work/*/analysis/**": allow')
     expect(generated).not.toContain('open-mercato_agent_orchestrator_load_skill')
     expect(generated).not.toContain('open-mercato_agent_orchestrator_run_skill_script')
     const outcomeContract = generated.slice(
@@ -167,11 +120,15 @@ describe('property_documents.process_pdf', () => {
       generated.indexOf('The PDF processing tool is the only output writer.'),
     )
     expect(outcomeContract).toContain('"kind": "artifact"')
-    expect(outcomeContract).toContain('"path": "brief.json"')
+    expect(outcomeContract).toContain('"fileName": "brief.json"')
+    expect(outcomeContract).toContain('"fileName": "pdf-pages.json"')
+    expect(outcomeContract).not.toContain('"path":')
     expect(outcomeContract).not.toContain('"fileName": "report.pdf"')
+    expect(generated).not.toContain('floor-plans.json')
+    expect(generated).not.toContain('Classify the page')
   })
 
-  it('publishes an object-shaped input schema accepted by the HTTP MCP adapter', () => {
+  it('publishes a strict object-shaped input schema accepted by the HTTP MCP adapter', () => {
     const schema = z.toJSONSchema(processPdfInputSchema, {
       unrepresentable: 'any',
     }) as Record<string, unknown>
@@ -183,6 +140,10 @@ describe('property_documents.process_pdf', () => {
       }),
     )
     expect(schema).not.toHaveProperty('oneOf')
+    expect(processPdfInputSchema.safeParse({ operation: 'finalize' }).success).toBe(true)
+    expect(
+      processPdfInputSchema.safeParse({ operation: 'finalize', brief: {} }).success,
+    ).toBe(false)
   })
 
   it('rejects non-canonical session tokens instead of mapping them to a directory', async () => {
@@ -202,12 +163,6 @@ describe('property_documents.process_pdf', () => {
     await expect(resolveSessionWorkspace(root, token)).rejects.toThrow('outside configured root')
   })
 
-  it('requires sorted unique in-range render pages', () => {
-    expect(validateRenderPages([1, 3], 3)).toEqual([1, 3])
-    expect(() => validateRenderPages([2, 1], 3)).toThrow('sorted')
-    expect(() => validateRenderPages([1, 1], 3)).toThrow('unique')
-    expect(() => validateRenderPages([4], 3)).toThrow('outside')
-  })
 
   it('writes a canonical rejection artifact for a 49-page PDF before extraction', async () => {
     const { root } = await makeWorkspace()
@@ -238,7 +193,7 @@ describe('property_documents.process_pdf', () => {
     })
   })
 
-  it('returns project-relative inspect paths that the sandboxed read tool can access', async () => {
+  it('inspects without exposing document text or rendering previews', async () => {
     const { root } = await makeWorkspace()
     const runtime = makeRuntime(root)
     const tool = createProcessPdfTool(runtime)
@@ -250,28 +205,11 @@ describe('property_documents.process_pdf', () => {
       operation: 'inspect',
       fileName: 'input.pdf',
       pageCount: 3,
-      pages: [
-        {
-          sourcePage: 1,
-          textPath: `work/${SESSION_TOKEN}/analysis/page-0001.txt`,
-          previewPath: `work/${SESSION_TOKEN}/analysis/page-0001.png`,
-        },
-        {
-          sourcePage: 2,
-          textPath: `work/${SESSION_TOKEN}/analysis/page-0002.txt`,
-          previewPath: `work/${SESSION_TOKEN}/analysis/page-0002.png`,
-        },
-        {
-          sourcePage: 3,
-          textPath: `work/${SESSION_TOKEN}/analysis/page-0003.txt`,
-          previewPath: `work/${SESSION_TOKEN}/analysis/page-0003.png`,
-        },
-      ],
+      pages: [{ sourcePage: 1 }, { sourcePage: 2 }, { sourcePage: 3 }],
     })
     expect(runtime.calls.map((call) => call.file)).toEqual([
       '/usr/bin/pdfinfo',
       '/usr/bin/pdftotext',
-      '/usr/bin/pdftoppm',
     ])
     expect(runtime.calls.every((call) => !call.args.includes('sh') && !call.args.includes('-c'))).toBe(true)
   })
@@ -331,7 +269,7 @@ describe('property_documents.process_pdf', () => {
     expect(await readFile(input, 'utf8')).toBe('%PDF-1.4\nfixture')
   })
 
-  it('finalizes validated manifests and renders only their plan pages', async () => {
+  it('writes exact raw text, a strict inventory, and one PNG for every page', async () => {
     const { root } = await makeWorkspace()
     const runtime = makeRuntime(root)
     const tool = createProcessPdfTool(runtime)
@@ -342,75 +280,52 @@ describe('property_documents.process_pdf', () => {
     expect(result).toEqual({
       ok: true,
       operation: 'finalize',
+      pageCount: 3,
       artifacts: [
-        { sourcePage: 2, path: `/home/opencode/work/${SESSION_TOKEN}/out/floor-plan-page-0002.png` },
-        { sourcePage: 3, path: `/home/opencode/work/${SESSION_TOKEN}/out/floor-plan-page-0003.png` },
+        { sourcePage: 1, path: `/home/opencode/work/${SESSION_TOKEN}/out/pdf-page-0001.png` },
+        { sourcePage: 2, path: `/home/opencode/work/${SESSION_TOKEN}/out/pdf-page-0002.png` },
+        { sourcePage: 3, path: `/home/opencode/work/${SESSION_TOKEN}/out/pdf-page-0003.png` },
       ],
       manifests: [
         `/home/opencode/work/${SESSION_TOKEN}/out/brief.json`,
-        `/home/opencode/work/${SESSION_TOKEN}/out/floor-plans.json`,
+        `/home/opencode/work/${SESSION_TOKEN}/out/pdf-pages.json`,
       ],
     })
     expect(runtime.calls.filter((call) => call.file === '/usr/bin/pdftoppm')).toHaveLength(3)
+    expect(
+      runtime.calls
+        .filter((call) => call.file === '/usr/bin/pdftoppm')
+        .every((call) => call.args.includes('150')),
+    ).toBe(true)
     const outputNames = (await readdir(path.join(root, SESSION_TOKEN, 'out'))).sort()
     expect(outputNames).toEqual([
       'brief.json',
-      'floor-plan-page-0002.png',
-      'floor-plan-page-0003.png',
-      'floor-plans.json',
+      'pdf-page-0001.png',
+      'pdf-page-0002.png',
+      'pdf-page-0003.png',
+      'pdf-pages.json',
     ])
-    const floorPlans = JSON.parse(
-      await readFile(path.join(root, SESSION_TOKEN, 'out', 'floor-plans.json'), 'utf8'),
-    )
-    expect(floorPlans.plans.map((plan: { artifactPath: string }) => plan.artifactPath)).toEqual([
-      'floor-plan-page-0002.png',
-      'floor-plan-page-0003.png',
-    ])
+    expect(
+      JSON.parse(await readFile(path.join(root, SESSION_TOKEN, 'out', 'brief.json'), 'utf8')),
+    ).toEqual({ brief: RAW_TEXT })
+    expect(
+      JSON.parse(await readFile(path.join(root, SESSION_TOKEN, 'out', 'pdf-pages.json'), 'utf8')),
+    ).toEqual({
+      pageCount: 3,
+      files: ['pdf-page-0001.png', 'pdf-page-0002.png', 'pdf-page-0003.png'],
+    })
   })
 
-  it('reports every manifest invariant needed for one corrected finalization retry', async () => {
+  it('preserves an empty pdftotext result as an empty raw brief', async () => {
     const { root } = await makeWorkspace()
-    const runtime = makeRuntime(root)
-    const tool = createProcessPdfTool(runtime)
-    const base = makeFinalizeInput()
-    const input = {
-      ...base,
-      brief: {
-        ...base.brief,
-        source: base.brief.source,
-        keyFacts: [{ label: 'Address from drawing', value: 'Example Street', sourcePages: [2] }],
-      },
-      floorPlans: {
-        ...base.floorPlans,
-        source: base.floorPlans.source,
-        plans: base.floorPlans.plans,
-        otherPages: [{ sourcePage: 1, reason: 'unrelated' as const }],
-      },
-    }
+    const tool = createProcessPdfTool(makeRuntime(root, 3, { rawText: '' }))
 
     await tool.handler({ operation: 'inspect' }, makeContext())
-    const failure = await tool.handler(input, makeContext())
+    await tool.handler(makeFinalizeInput(), makeContext())
 
-    expect(failure).toMatchObject({
-      ok: false,
-      code: 'pdf_processing_failed',
-      fileName: 'input.pdf',
-      pageCount: 3,
-    })
-    const failureMessage = (failure as { message: string }).message
-    expect(failureMessage).toContain('keyFacts[0] contains page 2 outside briefPages')
-    expect(failureMessage).toContain('page 1 is classified more than once')
-    expect(runtime.calls.filter((call) => call.file === '/usr/bin/pdftoppm')).toHaveLength(1)
-    expect(await readdir(path.join(root, SESSION_TOKEN, 'out'))).toEqual([
-      'processing-error.json',
-    ])
-
-    input.brief.keyFacts[0]!.sourcePages = [1]
-    input.floorPlans.otherPages = []
-    const retry = await tool.handler(input, makeContext())
-
-    expect(retry).toMatchObject({ ok: true, operation: 'finalize' })
-    expect(runtime.calls.filter((call) => call.file === '/usr/bin/pdftoppm')).toHaveLength(3)
+    expect(
+      JSON.parse(await readFile(path.join(root, SESSION_TOKEN, 'out', 'brief.json'), 'utf8')),
+    ).toEqual({ brief: '' })
   })
 
   it('rejects finalization before inspection and leaves only an error artifact', async () => {
@@ -439,21 +354,29 @@ describe('property_documents.process_pdf', () => {
     ])
   })
 
-  it('rejects incomplete page partitions before rendering and removes partial outputs', async () => {
+  it('removes partial page renders when any page fails', async () => {
     const { root } = await makeWorkspace()
-    const runtime = makeRuntime(root)
+    const runtime = makeRuntime(root, 3, { failRenderPage: 2 })
     const tool = createProcessPdfTool(runtime)
-    const input = makeFinalizeInput()
-    input.floorPlans.plans = input.floorPlans.plans.slice(0, 1)
 
     await tool.handler({ operation: 'inspect' }, makeContext())
-    const result = await tool.handler(input, makeContext())
+    const result = await tool.handler(makeFinalizeInput(), makeContext())
 
     expect(result).toMatchObject({ ok: false, code: 'pdf_processing_failed' })
-    expect(runtime.calls.filter((call) => call.file === '/usr/bin/pdftoppm')).toHaveLength(1)
     expect(await readdir(path.join(root, SESSION_TOKEN, 'out'))).toEqual([
       'processing-error.json',
     ])
+  })
+
+  it('keeps a 48-page success within the configured 50 captured files', async () => {
+    const { root } = await makeWorkspace()
+    const tool = createProcessPdfTool(makeRuntime(root, 48, { rawText: '' }))
+
+    await tool.handler({ operation: 'inspect' }, makeContext())
+    const result = await tool.handler(makeFinalizeInput(), makeContext())
+
+    expect(result).toMatchObject({ ok: true, pageCount: 48 })
+    expect(await readdir(path.join(root, SESSION_TOKEN, 'out'))).toHaveLength(50)
   })
 
   it('fails closed when the active session belongs to a different agent', async () => {

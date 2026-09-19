@@ -23,19 +23,17 @@ const PDF_INTAKE_OUTCOME_EXAMPLE = `\`\`\`json
   "kind": "artifact",
   "artifacts": [
     {
-      "path": "brief.json",
       "fileName": "brief.json",
       "mimeType": "application/json",
-      "caption": "Validated property brief manifest."
+      "caption": "Exact raw text extracted from the PDF."
     },
     {
-      "path": "floor-plans.json",
-      "fileName": "floor-plans.json",
+      "fileName": "pdf-pages.json",
       "mimeType": "application/json",
-      "caption": "Validated floor-plan manifest."
+      "caption": "Ordered inventory of rendered PDF pages."
     }
   ],
-  "summary": "Processed the PDF into a property brief and floor-plan artifacts."
+  "summary": "Extracted the raw PDF text and rendered every page."
 }
 \`\`\``
 
@@ -49,7 +47,9 @@ function hardenPdfIntakeOutcomeContract(source, agentPath) {
   const contract = source.slice(outcomeStart, proseStart)
   if (
     contract.includes('"kind": "artifact"') &&
-    contract.includes('"path": "brief.json"') &&
+    contract.includes('"fileName": "brief.json"') &&
+    contract.includes('"fileName": "pdf-pages.json"') &&
+    !contract.includes('"path":') &&
     !contract.includes('"fileName": "report.pdf"')
   ) {
     return source
@@ -87,13 +87,16 @@ function hardenGeneratedAgentFile(cwd, fileName, readableSubdir) {
   const workspaceRoot = (
     process.env.OM_OPENCODE_WORKSPACE_ROOT_CONTAINER || '/home/opencode/work'
   ).replace(/\/+$/, '')
+  const hasReadableSubdir = typeof readableSubdir === 'string'
   const relativeWorkspaceRoot = path.posix.relative('/home/opencode', workspaceRoot)
   const workspaceRelativeGlob =
-    relativeWorkspaceRoot && !relativeWorkspaceRoot.startsWith('../')
+    hasReadableSubdir && relativeWorkspaceRoot && !relativeWorkspaceRoot.startsWith('../')
       ? `${relativeWorkspaceRoot}/*/${readableSubdir}/**`
       : null
-  const workspaceGlob = `${workspaceRoot}/*/${readableSubdir}/**`
-  const workspaceContainerGlob = `${workspaceRoot.replace(/^\/+/, '')}/*/${readableSubdir}/**`
+  const workspaceGlob = hasReadableSubdir ? `${workspaceRoot}/*/${readableSubdir}/**` : null
+  const workspaceContainerGlob = hasReadableSubdir
+    ? `${workspaceRoot.replace(/^\/+/, '')}/*/${readableSubdir}/**`
+    : null
   const permissionMarker = 'permission:\n'
   const taskPermissionMarker = '  task: deny\n'
 
@@ -126,21 +129,28 @@ function hardenGeneratedAgentFile(cwd, fileName, readableSubdir) {
   if (!toolsBlock.includes('  "*": false\n')) {
     toolsBlock = toolsBlock.replace('tools:\n', 'tools:\n  "*": false\n')
   }
-  if (!toolsBlock.includes('  read: true\n')) {
-    toolsBlock += '  read: true\n'
+  if (hasReadableSubdir) {
+    if (!toolsBlock.includes('  read: true\n')) toolsBlock += '  read: true\n'
+  } else {
+    toolsBlock = toolsBlock.replace('  read: true\n', '')
   }
 
+  const readPolicy = hasReadableSubdir
+    ? [
+        '  read:',
+        '    "*": deny',
+        `    ${JSON.stringify(workspaceGlob)}: allow`,
+        `    ${JSON.stringify(workspaceContainerGlob)}: allow`,
+        ...(workspaceRelativeGlob
+          ? [`    ${JSON.stringify(workspaceRelativeGlob)}: allow`]
+          : []),
+      ]
+    : ['  read: deny']
   const filePolicy = [
     'permission:',
     '  write: deny',
     '  edit: deny',
-    '  read:',
-    '    "*": deny',
-    `    ${JSON.stringify(workspaceGlob)}: allow`,
-    `    ${JSON.stringify(workspaceContainerGlob)}: allow`,
-    ...(workspaceRelativeGlob
-      ? [`    ${JSON.stringify(workspaceRelativeGlob)}: allow`]
-      : []),
+    ...readPolicy,
     '  bash: deny',
     '',
   ].join('\n')
@@ -152,15 +162,20 @@ function hardenGeneratedAgentFile(cwd, fileName, readableSubdir) {
     hardenedSource = hardenRoomDimensionsOutcomeContract(hardenedSource, agentPath)
   }
 
-  for (const required of [
-    '  read: true',
+  const requiredPolicy = [
     '  "*": false',
     '  write: deny',
     '  edit: deny',
-    `    ${JSON.stringify(workspaceGlob)}: allow`,
-    `    ${JSON.stringify(workspaceContainerGlob)}: allow`,
+    ...(hasReadableSubdir
+      ? [
+          '  read: true',
+          `    ${JSON.stringify(workspaceGlob)}: allow`,
+          `    ${JSON.stringify(workspaceContainerGlob)}: allow`,
+        ]
+      : ['  read: deny']),
     '  bash: deny',
-  ]) {
+  ]
+  for (const required of requiredPolicy) {
     if (!hardenedSource.includes(required)) {
       throw new Error(`Generated property document agent ${fileName} is missing required policy: ${required}`)
     }

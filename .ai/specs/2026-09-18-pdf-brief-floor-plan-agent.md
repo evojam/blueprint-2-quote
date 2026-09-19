@@ -1,88 +1,86 @@
 # PDF Brief and Floor-Plan Intake Agent
 
 **Date**: 2026-09-18
-**Status**: Implemented
+**Status**: Draft amendment — raw text and page images
 
 ## TLDR
 
-Add an app-owned OpenCode file agent that accepts one tenant- and organization-scoped PDF attachment, separates text-brief pages from drawing pages, parses the brief into provenance-bearing JSON, and renders each detected floor-plan page as an individual PNG. The action returns a `kind: "artifact"` outcome listing `brief.json` and `floor-plans.json`; the bounded finalizer also produces ordered `floor-plan-page-####.png` files inside the action workspace.
+Amend the existing `property_documents.pdf_intake` file agent into a deterministic PDF preprocessing step. One authorized PDF produces strict `brief.json` containing exactly `{ "brief": string }`, a non-semantic `pdf-pages.json` inventory, and one ordered `pdf-page-####.png` for every source page. Because installed Agent Orchestrator 0.8.0 limits `AgentResult.artifacts` to 20 references, the result names the two JSON control artifacts while the filesystem-authoritative file plane durably captures every PNG as a scoped `AgentRunArtifact`; a later flow accepts only the exact complete captured set.
 
-The implementation reuses Agent Orchestrator file-plane staging, the existing attachments contract, OpenCode action outcomes, and per-run sandbox cleanup. An app-owned, read-only MCP tool invokes `pdfinfo`, `pdftotext`, and `pdftoppm` through fixed `execFile` calls with validated arguments and current-run paths, hashes the inspected input, validates the complete model-produced manifest payload, and is the only writer of final files; the model receives neither shell nor file-write capability. `poppler-utils` is installed in the app/MCP runtime image and verified as a supported hybrid-development host prerequisite. Durable/downloadable artifact storage is intentionally outside this scope; without a configured `storageService`, action output metadata survives but workspace bytes are removed during cleanup.
+This stage performs no image interpretation, page classification, floor-plan description, or brief parsing. `floor-plans.json` is removed; later workflow stages own all image analysis. The current Agent Orchestrator file plane, scoped attachment/artifact contracts, Poppler runtime, stable agent/tool IDs, and workspace cleanup remain in use.
 
 ## Problem Statement
 
-A single property-intake PDF may combine a textual project brief with plan-view architectural and technical drawings. Downstream processing needs the brief as structured, traceable data while floor-plan pages must remain available as ordered image files and carry machine-readable descriptions such as architectural/walls, electrical, plumbing, HVAC, lighting, reflected ceiling, fire safety, furniture, demolition, site, mixed, or unknown. Elevations, sections, details, schedules, covers, and legends are classified as `other`, summarized in the manifest, and do not produce PNG artifacts.
+The current intake agent asks the model to parse the brief, inspect every rendered page, classify floor plans, and produce a large pair of manifests. The requested boundary is simpler: downstream stages need the original extracted PDF text and source-page images, while semantic interpretation belongs later in the workflow.
 
-The current installation can stage attachment bytes for a file agent, but file-plane execution is disabled and neither the host MCP process nor the app/MCP container image has the required PDF utilities. Aggregate OCR text loses page boundaries and cannot reliably distinguish visually similar technical drawings.
+Keeping classification here duplicates responsibility, makes the output probabilistic, and couples preprocessing to one floor-plan taxonomy. The intake stage must instead preserve source material deterministically: full Poppler text plus an image for every page, with source order encoded in filenames.
 
 ## Overview and Success Measures
 
-- **Primary outcome:** For an authorized PDF of at most 48 pages, one agent run produces a provenance-bearing parsed brief and one ordered PNG artifact for every page classified as a floor-plan drawing.
-- **Leading indicators:** The agent is discoverable in Backend → Agents; Playground exposes its sample input; generated OpenCode permissions grant workspace `read` while denying `write`, `edit`, and `bash`; the app-owned MCP tool is the only Poppler and output-writing path.
-- **Baseline:** The file plane is configured but disabled, no scoped PDF-processing MCP tool exists, and current app/MCP runtimes do not expose the required PDF utilities.
-- **Market / product reference:** Docling preserves hierarchy, layout, and provenance in its document model (https://docling-project.github.io/docling/concepts/docling_document/). Unstructured exposes page-aware PDF partition strategies rather than treating the document as one undifferentiated string (https://docs.unstructured.io/open-source/core-functionality/partitioning). This feature adopts page provenance and explicit element classification, but rejects their larger runtime dependency sets in favor of the existing file plane plus a bounded Poppler MCP adapter.
+- **Primary outcome:** For an authorized PDF of at most 48 pages, one run produces strict one-field `brief.json` and exactly one `pdf-page-####.png` per source page.
+- **Leading indicators:** The agent never reads page text/images; `finalize` accepts no model-authored document data; no `floor-plans.json` or classification fields appear in authored/generated runtime contracts.
+- **Baseline:** The implemented agent asks the model to parse a structured brief, classify pages, describe floor plans, and finalizes `brief.json`, `floor-plans.json`, and selected plan PNGs.
+- **Market / product reference:** Docling and Unstructured separate deterministic document extraction from later semantic processing. This amendment adopts that boundary using the already-installed Poppler/file-plane path and defers every image interpretation decision.
 
 ## Goals
 
-- **REQ-001** — An authorized user can run `property_documents.pdf_intake` with exactly one PDF attachment and receive a general parsed brief whose sections, requirements, facts, and unresolved items cite source page numbers.
-- **REQ-002** — Every page visually classified as a floor plan is emitted as an individual PNG named with its original 1-based source-page number.
-- **REQ-003** — `floor-plans.json` describes every emitted PNG with its source page, title, level when visible, primary type, disciplines, scale when visible, description, confidence, and evidence.
-- **REQ-004** — Attachment access, sandbox paths, persisted artifacts, and cleanup remain tenant/org scoped and fail closed.
+- **REQ-001** — An authorized user can run `property_documents.pdf_intake` with exactly one PDF attachment and receive `brief.json` containing only `{ "brief": string }`, where `brief` equals the complete raw text emitted by server-owned `pdftotext -layout` for the unchanged PDF.
+- **REQ-002** — Every source page is emitted and durably captured as exactly one PNG named `pdf-page-####.png`; strict `pdf-pages.json` declares the complete ordered filename set, and a run is handoff-ready only when the inventory, brief, and all image rows exist in tenant/org/run-scoped `AgentRunArtifact` storage with retrievable bytes.
+- **REQ-003** — The stage emits no `floor-plans.json` and performs no model-based brief parsing, image analysis, page classification, floor-plan typing, or drawing description.
+- **REQ-004** — Attachment access, sandbox paths, persisted artifacts, raw text/page images, and cleanup remain tenant/org scoped and fail closed.
 - **REQ-005** — Local hybrid, full-app development, and full-app production topologies expose the same scoped PDF-processing tool and shared workspace contract.
 
 ## Non-goals
 
-- Editing, vectorizing, measuring, or validating the technical correctness of drawings.
+- Determining whether a page is a floor plan or another document type.
+- Extracting rooms, dimensions, disciplines, evidence, titles, levels, scales, or other image semantics.
+- Parsing, summarizing, translating, normalizing, or semantically validating the extracted text.
 - Creating or mutating property, project, quote, task, or workflow records.
-- Supporting encrypted/password-protected PDFs, malformed PDFs, or documents above 48 pages in this phase.
-- Adding a new upload UI, API route, database entity, migration, queue, or worker.
-- Treating model-derived brief fields or drawing classifications as authoritative domain data.
-- Supporting non-PDF inputs.
+- Supporting encrypted/password-protected PDFs, malformed PDFs, documents above 48 pages, non-PDF inputs, or OCR for image-only PDFs.
+- Adding a new upload UI, API route, database entity, migration, queue, worker, or downstream image-analysis agent in this amendment.
 
 ## Proposed Solution
 
-1. Add an app-owned `property_documents` module containing the file agent `property_documents.pdf_intake` and the read-only MCP tool `property_documents.process_pdf`.
-2. Enable the existing Agent Orchestrator file plane for this application and raise the artifact capture count to 50: two JSON artifacts plus at most 48 page PNGs.
-3. Install `poppler-utils` in the main app/MCP Docker image. Hybrid host development declares and verifies the same OS prerequisite.
-4. Stage only an attachment object ID through the reserved `input.__files.attachments` envelope. The installed stager validates the stored record under trusted tenant and organization scope before staging; the sample intentionally omits optional filename/OCR fields.
-5. Generate the OpenCode agent with `files: true`, `filesBash: false`, and only `property_documents.process_pdf` plus core outcome tools. The model can read page previews inside the serialized, wiped workspace but cannot write/edit files or execute shell commands.
-6. The MCP tool derives the current run from `McpToolContext.sessionId`, confirms the active agent ID, and never accepts a filesystem path from the model. It requires the server-issued token to match the installed generator's exact `^sess_[0-9a-f]{32}$` format and uses that token unchanged as the directory name; any other token is rejected rather than sanitized. It resolves `<OM_OPENCODE_WORKSPACE_ROOT>/<sessionToken>`, verifies realpath containment under the workspace root, requires existing `in/` and `out/` directories, and requires `agentRunSessionStore` to resolve the same active agent/run before every operation. It exposes:
-   - `inspect`: find exactly one staged PDF in that run's `in/`, validate it with `pdfinfo`, reject encrypted/malformed/over-48-page inputs, create page-bounded text and 96-DPI preview PNGs under the run's sibling `analysis/` directory, and persist a server-owned filename/page-count/SHA-256 inspection marker;
-   - `finalize`: require the unchanged inspected bytes, validate the complete brief/floor-plan schemas, require every nested brief provenance list to be a subset of `briefPages`, and validate the exact page partition. Semantic failures return one bounded message containing all actionable violations and replace partial outputs with normative `processing-error.json`; the agent may correct them and retry finalization once against the existing inspection. A valid finalization renders plan pages at 150 DPI, then atomically writes `brief.json`, `floor-plans.json`, and exact `floor-plan-page-####.png` outputs.
-7. Classify every page as `brief`, `floor_plan`, or `other`. Only plan-view sheets are `floor_plan`; elevations, sections, details, schedules, covers, and legend-only sheets are `other`.
-8. Return an `artifact` action outcome listing the server-authored JSON manifests. The finalizer writes both manifests and final PNGs under that run's `out/`; text files, the inspection marker, and 96-DPI previews remain under the sibling `analysis/` directory, cannot collide with a staged input filename, and are wiped with the workspace. A deployment may configure the installed artifact collector separately, but this feature does not require S3 or another durable file store.
+1. Keep stable IDs `property_documents.pdf_intake` and `property_documents.process_pdf`, plus the existing one-attachment file-agent entry point.
+2. Preserve `inspect` as the intake-only hash boundary: validate one staged PDF with `pdfinfo`, run fixed `pdftotext -layout`, retain the complete aggregate UTF-8 output, and persist the filename/page-count/SHA-256 inspection marker. Do not render 96-DPI previews or split page text; the separately retired `pdf_text_reader` remains retired.
+3. Make the intake prompt call `inspect` once and, on success, call `finalize` once with exactly `{ "operation": "finalize" }`. It does not read document files or send model-authored document content.
+4. Bind `finalize` to the unchanged inspected PDF. Read the retained aggregate text, render every source page at 150 DPI, and atomically write strict `brief.json`, strict `pdf-pages.json`, and `pdf-page-####.png` for every page.
+5. On success, submit one `artifact` outcome listing only `brief.json` and `pdf-pages.json`, staying within the installed 20-reference AgentResult limit. The filesystem-authoritative collector independently scans `out/`, durably stores all control files and PNGs, and persists scoped `AgentRunArtifact` rows; downstream handoff fails closed unless those rows exactly match `pdf-pages.json`. Remove `floor-plans.json` entirely.
+6. On any validation, Poppler, hash, render, or output failure, replace partial output with the existing normative `processing-error.json`; there is no semantic correction retry because finalization accepts no model-authored classification.
+7. Keep scope, active-run binding, exact session-token validation, realpath containment, fixed `execFile` arguments, page/artifact limits, storage authorization, and workspace cleanup unchanged.
+8. Add an RFQ-owned complete-set validator now. It may run only after the synchronous intake invocation returns; it strict-parses byte-retrievable `brief.json` and `pdf-pages.json`, then verifies the exact scoped page artifact rows and PNG bytes. The current RFQ commands raise bounded code `PDF_INTAKE_DOWNSTREAM_DEFERRED` before any semantic agent or promotion call. The approved dependent RFQ implementation reuses this validator and replaces only the deliberate stop with complete-brief matching and idempotent materialization of every page.
 
 ### Design Decisions and Alternatives
 
 | Decision | Rationale | Alternative considered | Why rejected / deferred |
 |---|---|---|---|
-| App-owned file agent | Uses installed orchestration, trace, guardrail, attachment, and artifact contracts | Standalone PDF API | Would duplicate auth, scoping, storage, and lifecycle behavior |
-| Bounded Poppler MCP tool in app/MCP runtime | Fixed binaries/arguments, validated current-run paths, inspected-byte binding, schema/page-set validation, server-owned atomic outputs, and no model shell/write capability | `filesBash: true` or model-authored output files in OpenCode | Untrusted PDF prompt injection could use shell/write access to read configuration or persist arbitrary/invalid artifacts |
-| Individual PNG artifacts | Matches the required downstream representation and preserves page independence | One PDF or archive | User explicitly selected unarchived per-page images |
-| General brief JSON | Avoids guessing a future property schema while remaining machine-usable | Property-specific fixed schema | Domain fields and owning record are not yet specified |
-| Source page in every record/filename | Stable provenance and debuggability | Re-number extracted subsets | Loses traceability to the submitted document |
-| 48-page hard limit | Fits the approved 50-artifact cap with two manifests and bounds model/runtime cost | Unbounded PDFs | Risks resource exhaustion and silent artifact truncation |
-| Artifact-only output | Preserves propose-only/no-direct-write policy | Agent writes business records | No approved target entity or mutation contract exists |
+| Server-owned raw text | Preserves actual Poppler output and removes model rewriting/truncation | Ask the model to copy page text | Model output is not raw |
+| PNG for every page | Defers all image decisions and guarantees the next stage receives complete ordered source material | Keep selecting floor-plan pages here | Selection is image analysis and belongs to the next stage |
+| Remove `floor-plans.json` | No semantic image data is produced in preprocessing | Emit an empty or path-only manifest | Duplicates information already encoded in ordered filenames |
+| One-field `brief.json` | Matches the selected machine-readable contract | Emit `brief.txt` | User selected a one-field JSON object |
+| Retain the file agent | Reuses authorized attachment staging, run trace, artifact capture, and cleanup behind the existing entry point | Add a direct PDF API | Duplicates file-plane authorization/lifecycle and changes the user entry point |
+| Keep `inspect` + `finalize` | Preserves the inspected-byte hash boundary while removing all model-authored finalization data | Collapse to one new operation | Unnecessary contract churn |
+| Two control references + file-plane PNGs | Preserves 48-page support under the installed `AgentResult.artifacts.max(20)` while every PNG remains a durable run artifact | Lower PDF limit to 19 or patch the framework globally | User selected 48-page support; dependency patch is disproportionate |
+| Clean app-contract cutover | The implemented RFQ consumer is not compatible with the new artifacts and must stop before semantic analysis until its downstream contract is implemented | Keep old artifacts beside new output | Contradicts the requested boundary and retains unnecessary model work |
 
 ## Domain Vocabulary and Business Rules
 
 | Term / invariant | Precise meaning or rule | Source of truth | Failure behavior |
 |---|---|---|---|
-| Input PDF | Exactly one staged attachment whose bytes are accepted by `pdfinfo`; extension or model assertion alone is insufficient | `attachments` record + staged bytes + Poppler | Reject before model analysis where possible |
-| Source page | Original 1-based page number in the submitted PDF | Poppler page order | Never renumber extracted pages |
-| Brief page | Page whose primary information is textual project requirements/context | Agent classification | Low confidence is recorded; page may still be `other` |
-| Floor-plan page | Plan-view drawing communicating spatial layout or building systems | Visual page classification | Emit one PNG and one manifest entry |
-| Other page | Cover, legend-only, schedule, elevation, section, detail, or unrelated content not itself a plan view | Agent classification | Add one `otherPages` entry; do not emit PNG |
-| Primary type | One of `architectural`, `walls`, `electrical`, `plumbing`, `hvac`, `lighting`, `reflected_ceiling`, `fire_safety`, `furniture`, `demolition`, `site`, `mixed`, `unknown` | `floor-plans.json` | Use `unknown`, never invent a type |
-| Disciplines | Unique subset of the primary-type vocabulary excluding `mixed`; may contain several systems | `floor-plans.json` | Empty when unsupported by visible evidence |
-| Complete output | Two valid JSON manifests plus one PNG for every floor-plan page; no partial subset | Sandbox output before capture | If input or output limits are exceeded, emit only normative `processing-error.json` |
+| Input PDF | Exactly one staged attachment whose bytes are accepted by `pdfinfo`; extension/model assertion is insufficient | `attachments` record + staged bytes + Poppler | Reject before output |
+| Raw PDF text | Complete UTF-8 contents written by `pdftotext -layout`, preserved at the parsed-string level | Server-owned aggregate analysis file bound to inspection hash | Fail finalization; never substitute model/OCR text |
+| Source page | Original 1-based page position in the PDF | `pdfinfo` page count and Poppler render order | Never renumber or omit |
+| Page image | 150-DPI PNG named `pdf-page-####.png`; exactly one per source page, captured from `out/` as a run artifact rather than enumerated in `AgentResult` | Server-owned `pdftoppm` render + Agent Orchestrator collector | Any missing/empty page fails preprocessing; any missing persisted row makes the run ineligible for downstream handoff |
+| Complete output | Strict `brief.json`, strict `pdf-pages.json`, and exactly `pageCount` PNGs; no semantic manifest | Scoped result/out directory | Any preprocessing failure leaves only `processing-error.json` |
+| Handoff-ready run | The scoped artifact list exactly matches `brief.json`, `pdf-pages.json`, and its declared ordered PNG filenames, all with retrievable bytes | Installed Agent Orchestrator 0.8.0 file plane | Later flow rejects incomplete/skipped/extra/failed capture; source run success alone is insufficient |
+| Deferred analysis | Classification, plan detection, room/dimension extraction, and other image semantics happen after this stage | Future downstream contract | Not implemented or guessed here |
 
 ## Users, Permissions, and Scope
 
 | Actor | Allowed outcomes | Scope rule | Required feature IDs |
 |---|---|---|---|
 | Authorized staff user | Run agent and view/download its run artifacts | Exactly one selected tenant organization | `agent_orchestrator.agents.run` |
-| Workflow principal | Invoke the agent and consume artifact references | Workflow-bound tenant and organization | Workflow granted features including `agent_orchestrator.agents.run` |
+| Workflow principal | Invoke the agent and consume verified artifact references | Workflow-bound tenant and organization; exact complete-set check required | Workflow granted features including `agent_orchestrator.agents.run` |
 
 Trusted `tenantId` and `organizationId` come from the authenticated session or workflow context. The input contains only an attachment UUID; the stager re-resolves it with both trusted scope keys. Missing, cross-tenant, cross-organization, or inaccessible attachments fail the run. There is no system-scope execution.
 
@@ -92,11 +90,12 @@ Trusted `tenantId` and `organizationId` come from the authenticated session or w
 |---|---|---|---|---|
 | Attachment storage and scoped reads | reuse | `attachments` | attachment object ID + storage driver | Canonical storage and authorization |
 | Agent execution and typed artifact result | reuse | `agent_orchestrator` | file-agent discovery | Canonical run/trace/guardrail lifecycle |
-| OpenCode execution | reuse | `ai_assistant` / OpenCode | installed runtime handler + MCP session auth | Avoid direct HTTP/runtime reimplementation |
-| PDF intake instructions and artifact contract | app-own | `property_documents` | `agents/<id>/` discovery | Application-specific behavior |
-| Bounded PDF processing | app-own | `property_documents` | discovered `ai-tools.ts` / MCP context | Prevent model shell access while preserving current-run file processing |
+| OpenCode execution | reuse | `ai_assistant` / OpenCode | installed runtime handler + MCP session auth | Preserve the existing authorized agent entry point and outcome lifecycle |
+| PDF intake instructions and artifact contract | app-own | `property_documents` | `agents/<id>/` discovery | Application-specific deterministic preprocessing contract |
+| Bounded PDF processing | app-own | `property_documents` | discovered `ai-tools.ts` / MCP context | Keep all extraction/rendering and writes server-owned |
 | Poppler binaries | app-owned image extension | main `Dockerfile` app/MCP image + documented host prerequisite | fixed `execFile` calls | Deterministic PDF inspection, text extraction, and rasterization |
-| Artifact encryption/storage | reuse | `agent_orchestrator` artifact plane + configured storage | run artifact capture | Existing encrypted, scoped download contract |
+| Artifact encryption/storage | reuse | `agent_orchestrator` 0.8.0 artifact plane + configured tenant storage | run artifact capture before sandbox wipe | Existing encrypted, scoped download contract; capture failure records no dangling row |
+| Handoff eligibility validation | app-own now | `rfq_intake` | source run result + scoped `AgentRunArtifact` rows after invocation return | Makes the current consumer fail explicitly and gives the later flow one reusable exact-set guard |
 
 ## Architecture and Data Flow
 
@@ -106,25 +105,24 @@ Playground / INVOKE_AGENT
   -> trusted tenant + selected organization
   -> attachment UUID in input.__files
   -> Agent Orchestrator stages PDF in private workspace/in
-  -> OpenCode agent calls scoped property_documents.process_pdf
-       -> MCP validates active session/run/agent
-       -> requires exact server token ^sess_[0-9a-f]{32}$ and uses it unchanged
-       -> derives <workspaceRoot>/<sessionToken>
-       -> realpath containment + existing in/out directory checks
-       -> execFile(pdfinfo/pdftotext/pdftoppm), fixed arguments only
-       -> page text + 96-DPI previews + SHA-256 inspection marker in workspace/analysis
-  -> model reads previews/text, classifies pages, parses brief
-  -> scoped tool validates the unchanged PDF and exact page partition
-  -> scoped tool atomically writes validated manifests + selected 150-DPI PNGs
-  -> artifact action outcome lists the validated manifests
-  -> optional installed collector may persist workspace/out when storageService exists
+  -> OpenCode agent calls process_pdf { operation: "inspect" }
+       -> active session/run/agent + containment validation
+       -> pdfinfo + pdftotext -layout
+       -> aggregate raw text + page text + SHA-256 marker in analysis/
+  -> OpenCode agent calls process_pdf { operation: "finalize" }
+       -> unchanged inspected-byte validation
+       -> pdftoppm renders every page at 150 DPI
+       -> atomic brief.json + pdf-pages.json + pdf-page-####.png outputs
+  -> artifact outcome lists brief.json + pdf-pages.json (2 of max 20 references)
+  -> collector independently scans out/, durably stores every control file and PNG, and persists scoped AgentRunArtifact rows
+  -> later flow strict-parses pdf-pages.json and validates the exact complete persisted set before handoff
   -> sandbox wipe + session-token revocation
 ```
 
-- **Module boundaries:** `property_documents` owns the agent and its bounded ephemeral PDF tool. `attachments` remains source of truth for uploaded bytes; Agent Orchestrator owns runs/artifacts; OpenCode owns model execution.
+- **Module boundaries:** `property_documents` owns deterministic ephemeral PDF preprocessing. `attachments` owns uploaded bytes; Agent Orchestrator owns runs/artifacts; future workflow stages own image analysis.
 - **Extension points:** app module metadata, discovered `ai-tools.ts`, and `agents/<id>/{AGENT.md,OUTCOME.md,SAMPLE.json}`; no installed source is edited.
-- **Alternatives considered:** direct document-processing API and a new persistent document entity were rejected because no domain record/lifecycle was requested. Unrestricted OpenCode bash was rejected because PDF contents are untrusted.
-- **Compatibility:** Additive module, stable additive agent/tool IDs, additive runtime package, and opt-in file-plane configuration. Existing agents and APIs remain unchanged.
+- **Alternatives considered:** a direct processing API was rejected because the existing file agent already supplies scoped staging/capture/cleanup. Model page reads were rejected because preprocessing has no interpretive task.
+- **Compatibility:** Stable agent/tool IDs, result kind, run route, attachment envelope, authorization, and topology remain. `brief.json` changes shape; `floor-plans.json` is removed; selected `floor-plan-page-####.png` outputs become complete `pdf-page-####.png` outputs; `finalize` no longer accepts `brief`/`floorPlans`.
 
 ### Runtime topology contract
 
@@ -134,23 +132,24 @@ Playground / INVOKE_AGENT
 | Full-app development | `docker-compose.fullapp.dev.yml`, main `Dockerfile` | named `opencode_work` mounted at `/home/opencode/work` in `app`, `mcp`, and `opencode` | all three: file flag true and both workspace roots `/home/opencode/work`; app: artifact count 50 | app/MCP image |
 | Full-app production | `docker-compose.fullapp.yml`, main `Dockerfile` | named `opencode_work` mounted at `/home/opencode/work` in `app`, `mcp`, and `opencode` | all three: file flag true and both workspace roots `/home/opencode/work`; app: artifact count 50 | app/MCP image |
 
-The OpenCode image does not need Poppler because the model has no bash capability. The MCP process owns all binary execution; all three processes share only the per-run workspace bytes required by their role.
+The MCP process owns Poppler execution. OpenCode needs no shell, file write/edit, document read, or image capability for this agent.
+`@open-mercato/enterprise` 0.8.0 completes the run row before best-effort artifact capture, but the same `agentRuntime.run` / `INVOKE_AGENT` promise returns only after that capture attempt finishes. Capture is file-level fail-closed—unstored bytes create no row—but does not retroactively fail the run. Therefore configured tenant storage is a handoff prerequisite. Consumers validate only after the invocation promise resolves; observing run status alone is not a readiness signal. A recovered completed run without the exact captured set is terminally not handoff-ready and must be rerun rather than polled indefinitely.
 
 ## User Journeys
 
-### Journey J-001 — Analyze one mixed PDF
+### Journey J-001 — Preprocess one PDF
 
 1. Staff uploads a PDF through the existing attachment flow and selects one organization.
-2. Staff opens Backend → Playground, selects `property_documents.pdf_intake`, and supplies the attachment UUID through `input.__files`.
-3. The agent validates/stages the PDF, invokes the bounded PDF tool, classifies its pages, parses brief content, and requests rendering only for floor-plan pages.
-4. The completed action returns an artifact outcome naming both JSON manifests; the finalizer has produced the ordered PNG files for that action. Without optional durable storage, the file bytes are intentionally removed with the sandbox after completion.
-5. If the attachment is inaccessible, not a PDF, malformed, password-protected, or above 48 pages, the run fails closed or emits a single structured processing error without partial success artifacts.
+2. Staff runs `property_documents.pdf_intake` with the attachment UUID.
+3. The agent invokes server-owned inspection and finalization without reading or interpreting document content.
+4. The result lists strict `brief.json` and non-semantic `pdf-pages.json`; runtime capture attempts to persist both plus one ordered PNG per page under the run, no `floor-plans.json` is present, and the run is handoff-ready only after an exact persisted-set check.
+5. Invalid scope/input, unsupported PDF, changed bytes, missing raw text, or any failed/empty page render yields only `processing-error.json`.
 
-### Journey J-002 — Invoke from a durable workflow
+### Journey J-002 — Hand off to a later workflow stage
 
-1. A workflow `INVOKE_AGENT` step receives an authorized attachment UUID.
-2. The same file-agent contract runs under the workflow principal and organization scope.
-3. The workflow receives the artifact action outcome and decides whether/how later steps consume its metadata; the agent itself performs no domain mutation.
+1. A workflow awaits the scoped intake invocation and checkpoints its returned `runId`; it never triggers handoff from run-status observation alone.
+2. After invocation return, the shared RFQ validator strict-parses scoped, byte-retrievable `brief.json` and `pdf-pages.json`, then requires every exact declared `pdf-page-####.png` `AgentRunArtifact` and rejects missing, extra, unreadable, incorrectly typed, or out-of-sequence files.
+3. In this amendment, the existing RFQ consumer then raises `PDF_INTAKE_DOWNSTREAM_DEFERRED` before any semantic Agent or artifact-promotion call. The approved dependent slice reuses the validator, sends the complete authorized brief to the matcher once, and idempotently materializes every image artifact as a scoped temporary Attachment for one room-dimensions invocation per page.
 
 ## UI and Interaction Contracts
 
@@ -167,141 +166,134 @@ N/A — no navigation, component, widget, localization, or interaction contract 
 
 ## Data Models
 
-N/A — no new entity or migration. Inputs reuse `attachments`; outputs reuse `AgentRunArtifact`. `brief.json` and `floor-plans.json` are encrypted artifact bytes, not database JSON columns.
+N/A — no new entity or migration. Inputs reuse `attachments`; outputs reuse `AgentRunArtifact`.
 
 ### `brief.json` — normative schema
 
-Every listed field is required. Unknown scalar values use `null`; collections are present as empty arrays. Additional properties are prohibited.
-
-| Field | Contract |
-|---|---|
-| `schemaVersion` | integer constant `1` |
-| `source` | object `{ fileName, pageCount, briefPages }`; `fileName` 1–255 chars; `pageCount` integer 1–48; `briefPages` sorted unique integers within the document |
-| `language` | non-empty string ≤32 chars, using `undetermined` when unknown |
-| `title` | string ≤500 chars or `null` |
-| `summary` | string ≤5,000 chars |
-| `sections` | array ≤100 of required `{ heading: string|null, text: string, sourcePages: number[] }`; heading ≤500, text 1–20,000, source pages sorted/unique/in range |
-| `requirements` | array ≤200 of required `{ category: string, text: string, sourcePages: number[] }`; category ≤200, text 1–4,000 |
-| `keyFacts` | array ≤200 of required `{ label: string, value: string, sourcePages: number[] }`; label ≤200, value 1–2,000 |
-| `unresolvedItems` | array ≤100 of required `{ text: string, sourcePages: number[] }`; text 1–2,000 |
-| `warnings` | array ≤100 of strings 1–1,000 chars |
-| `confidence` | finite number from 0 through 1 |
-
-### `floor-plans.json` — normative schema
-
-Every listed field is required. Additional properties are prohibited. Arrays are sorted by `sourcePage`.
-
-| Field | Contract |
-|---|---|
-| `schemaVersion` | integer constant `1` |
-| `source` | object `{ fileName, pageCount }` with the same bounds as `brief.json` |
-| `plans` | array ≤48; source pages are unique and each has exactly one captured PNG |
-| `plans[].sourcePage` | integer 1–`pageCount` |
-| `plans[].artifactPath` | exact `floor-plan-page-####.png`, where digits equal zero-padded `sourcePage` |
-| `plans[].title` / `level` / `scale` | string ≤500/200/100 chars or `null`; never inferred without visible evidence |
-| `plans[].primaryType` | enum `architectural|walls|electrical|plumbing|hvac|lighting|reflected_ceiling|fire_safety|furniture|demolition|site|mixed|unknown` |
-| `plans[].disciplines` | unique array of the same enum excluding `mixed`, maximum 12 |
-| `plans[].description` | non-empty string ≤2,000 chars |
-| `plans[].confidence` | finite number from 0 through 1 |
-| `plans[].evidence` | array ≤20 of non-empty strings ≤500 chars describing visible evidence, never hidden reasoning |
-| `otherPages` | array ≤48 of required `{ sourcePage, reason }`; pages unique; reason enum `cover|legend|schedule|elevation|section|detail|unrelated|unknown` |
-| `warnings` | array ≤100 of strings 1–1,000 chars |
-
-`plans` and `otherPages` are disjoint. Together with `source.briefPages`, their page-number union equals every source page exactly once. The number and paths of captured PNG artifacts exactly match `plans`.
-Every `sections[].sourcePages`, `requirements[].sourcePages`, `keyFacts[].sourcePages`, and `unresolvedItems[].sourcePages` value is a subset of `source.briefPages`. Facts visible only on a plan page belong in that plan's description/evidence, not in the brief.
-
-### `processing-error.json` — normative schema
-
-This is the only output when a same-scope staged file cannot be processed safely. Every field is required; additional properties are prohibited.
+Strict object with exactly one required field:
 
 ```json
 {
-  "schemaVersion": 1,
-  "status": "rejected",
-  "code": "page_limit_exceeded",
-  "message": "PDF has 49 pages; maximum is 48.",
-  "source": { "fileName": "input.pdf", "pageCount": 49 },
-  "limits": { "maxPages": 48, "maxArtifacts": 50 }
+  "brief": "Complete raw text emitted by pdftotext -layout"
 }
 ```
 
-`code` is one of `invalid_attachment_count`, `not_pdf`, `encrypted_pdf`, `malformed_pdf`, `page_limit_exceeded`, `pdf_runtime_unavailable`, `pdf_processing_failed`, `artifact_limit_exceeded`. `message` is 1–500 chars and contains no raw document content. `source.fileName` is 1–255 chars or `null`; `source.pageCount` is a positive integer or `null`. No brief, floor-plan manifest, or PNG may coexist with this artifact.
+| Field | Contract |
+|---|---|
+| `brief` | string, including `""` when the PDF has no extractable text; after JSON parsing equals the complete UTF-8 aggregate `pdftotext -layout` output, including whitespace/form-feed separators |
+
+No additional properties are present.
+
+For downstream use, the same scoped `brief.json` must also exist as a byte-retrievable `AgentRunArtifact`; the later matcher handoff reads and JSON-parses those authorized bytes, validates the strict one-field schema, and never trusts text copied from an Agent result summary.
+
+### `pdf-pages.json` — normative schema
+
+Strict server-authored object `{ "pageCount": number, "files": string[] }`. `pageCount` is 1 through 48; `files` has exactly `pageCount` entries and equals `pdf-page-0001.png` through the final contiguous page name in order. No semantic fields or additional properties are present.
+
+
+### `pdf-page-####.png` — normative contract
+
+- Exactly one non-empty PNG per source page.
+- `####` is the original 1-based page number, zero-padded to four digits.
+- PNGs are not enumerated in `AgentResult.artifacts`; installed 0.8.0 caps that array at 20 while this contract supports 48 pages.
+- With configured tenant storage, the filesystem-authoritative collector can persist one same-name `AgentRunArtifact` per PNG under the source `runId`, `tenantId`, and `organizationId`; downstream handoff requires the exact `pdf-pages.json` set and retrievable bytes.
+- 150 DPI, produced only by fixed server-owned `pdftoppm`; no semantic metadata is emitted.
+
+### Removed success artifact
+
+`floor-plans.json` is not emitted. Historical runs retain their existing artifact bytes; new runs expose `brief.json`, `pdf-pages.json`, and page PNGs on success.
+
+### `processing-error.json` — normative schema
+
+This remains the only output when a same-scope staged file cannot be processed safely. Its existing schema/failure codes remain unchanged. No brief, page inventory, or page PNG may coexist with this artifact.
 
 ## API, Command, and Error Contracts
 
-No new HTTP API or command. The new app-owned MCP tool is an additive stable tool contract:
+No new HTTP API or command. Stable tool ID, amended app-owned operations:
 
 | Method / command | Path / ID | Auth and feature gate | Input | Success response / event | Errors and concurrency | Requirement IDs |
 |---|---|---|---|---|---|---|
-| `POST` | `/api/agent_orchestrator/agents/property_documents.pdf_intake/run` | Auth + `agent_orchestrator.agents.run` + one selected organization | `{ input: { task?, __files: { attachments: [{ attachmentId }] } } }` | Existing artifact AgentResult + `runId` | Existing 400/401/403/404/422/429/500/503 | REQ-001–REQ-004 |
-| MCP tool | `property_documents.process_pdf` | active per-run session + active agent ID `property_documents.pdf_intake` + `agent_orchestrator.agents.run` | discriminated union `{ operation: "inspect" }` | `{ operation, fileName, pageCount, pages: [{ sourcePage, textPath, previewPath }] }` | canonical failure code and server-authored `processing-error.json`; one inspect per run | REQ-001, REQ-004, REQ-005 |
-| MCP tool | `property_documents.process_pdf` | same | `{ operation: "finalize", brief, floorPlans }` with bounded strict schemas | validated manifests plus `{ operation, artifacts, manifests }` | aggregates actionable source/provenance/page-partition violations into the existing bounded `pdf_processing_failed` response; permits one corrected retry against the existing inspection; rejects changed/uninspected input, partial render, unavailable Poppler, or artifact overflow; every failure replaces partial output with one error artifact | REQ-002–REQ-005 |
-| Workflow activity | `INVOKE_AGENT` | Workflow principal + granted feature | Same business input and reserved file envelope | Existing artifact result | Existing workflow retry/timeout/cancel behavior | REQ-001–REQ-004 |
+| internal commands | `rfq_intake.plans.analyze`, `rfq_intake.requirements.match` | trusted workflow scope | correlated new-format intake run after invocation return | no success path in this amendment | reuse complete-set validator, then throw `[internal] PDF_INTAKE_DOWNSTREAM_DEFERRED` before model/runtime/promotion work; no automatic retry | REQ-002–REQ-004 |
+| `POST` | `/api/agent_orchestrator/agents/property_documents.pdf_intake/run` | Auth + `agent_orchestrator.agents.run` + selected organization | existing reserved attachment input | Existing artifact AgentResult + `runId` | Existing route errors | REQ-001–REQ-004 |
+| MCP tool | `property_documents.process_pdf` | active session + allowed PDF agent + feature | `{ operation: "inspect" }` | `{ operation, fileName, pageCount, pages: [{ sourcePage }] }` | canonical failure + server-authored error; one inspect per run | REQ-001, REQ-004, REQ-005 |
+| MCP tool | `property_documents.process_pdf` | active session + exact `property_documents.pdf_intake` | `{ operation: "finalize" }` | metadata only: `{ operation, pageCount, artifacts: [{ sourcePage, path }], manifests: [briefPath, pageInventoryPath] }`; raw text exists only in `brief.json` | rejects changed/uninspected input, missing raw text, failed/empty render, unavailable Poppler, or artifact overflow; failure replaces partial output | REQ-001–REQ-005 |
 
-The MCP tool is `isMutation: false`: it changes only the active run's ephemeral workspace and cannot persist domain state. It never accepts a path, command, DPI, output name, tenant ID, organization ID, or session token from model input. For every call it resolves `ctx.sessionId` through `agentRunSessionStore`, confirms the active run and exact agent ID, requires the installed generator's exact `^sess_[0-9a-f]{32}$` token format, uses the token unchanged as the directory name, verifies realpath containment beneath `OM_OPENCODE_WORKSPACE_ROOT`, and requires already-created `<sessionToken>/{in,out}` directories. It uses `execFile` without a shell, enforces time/output bounds, and returns serializable metadata only.
-
-The stable agent/tool IDs are additive. Existing request routes, session-token format, attachment envelope, and artifact response shape are unchanged.
+`inspect` and `finalize` are intake-only and accept no model-supplied text, page numbers, classifications, metadata, paths, scope, or output names. The retired `property_documents.pdf_text_reader` identity remains rejected.
 
 Processing errors:
 
-- wrong-scope or missing attachments fail in the installed stager before inference; zero/multiple same-scope staged inputs are rejected by the first bounded tool call with only normative `processing-error.json`;
-- non-PDF bytes, malformed/password-protected PDF, page count above 48, unavailable/failed Poppler, changed inspected bytes, invalid manifest data, or projected artifact overflow create only normative `processing-error.json` when the sandbox is writable; semantic manifest errors use a bounded actionable message so the agent can correct all reported invariants and retry once;
-- model-authored arbitrary files are impossible because generated `write` and `edit` tools are denied; the finalizer validates and writes the only accepted output set;
-- artifact storage unavailable remains fail-closed: no dangling artifact row is recorded.
+- wrong-scope/missing attachments fail before inference; zero/multiple PDFs produce only `processing-error.json`;
+- malformed/encrypted/over-limit input, Poppler failure, changed bytes, missing aggregate text, wrong render count, empty PNG, or artifact overflow produce only `processing-error.json`;
+- no semantic retry exists; one failed finalization is terminal;
+- artifact storage failure creates no dangling `AgentRunArtifact`; installed 0.8.0 capture is best-effort after run completion, so a later flow treats an incomplete persisted set as not handoff-ready even if the Agent result succeeded.
 
 ## Events, Jobs, Notifications, and Cross-Module Flows
 
-No new worker, queue, event, notification, or scheduler contract. Direct Playground execution is synchronous. Durable workflow execution continues through the installed workflow and worker contracts.
+No new worker, queue, event, notification, or scheduler contract. Direct Playground execution is synchronous. Installed capture runs before the invocation promise returns; `agent_orchestrator.artifact.captured` remains audit evidence, not a trigger required by this slice. The artifact result/run plus an exact post-return persisted-set check is the stable handoff boundary. Current RFQ commands stop with `PDF_INTAKE_DOWNSTREAM_DEFERRED`; later flow code converts selected images to `Attachment` IDs before downstream `__files.attachments`. A captured artifact ID is never passed where an Attachment ID is required, and the installed proposal-only promotion command is not used without an approved proposal.
 
 ## Security, Privacy, and Compliance
 
-- **Authorization / artifact-authorization:** Only attachment object IDs are accepted. Staging re-resolves each attachment under trusted tenant and organization scope. The PDF tool additionally requires an active run session for exactly `property_documents.pdf_intake`. If a deployment later enables durable run artifacts, downloads reuse the installed run-artifact authorization path.
-- **Tenant isolation:** No tenant/org/session identifier or filesystem path is trusted from tool input. Wrong-scope or missing attachments fail closed before inference.
-- **Sensitive data / optional encrypted storage:** Source bytes remain in attachment storage. The action result contains only bounded artifact metadata. When a deployment separately enables AgentRunArtifact storage, the installed collector/encryption/download authorization contracts apply; this feature neither requires nor configures S3.
-- **Prompt injection:** PDF text and drawings are untrusted evidence, never instructions. The agent has no bash, network, file write/edit, domain mutation, or sub-agent capability. Generated `read` permission is workspace-root scoped only because the installed OpenCode policy is static; the supported topology pins `OM_OPENCODE_POOL_SIZE=1`, and the installed lease manager wipes the sole run directory before reuse.
-- **Binary boundary:** Only the MCP process invokes `/usr/bin/pdfinfo`, `/usr/bin/pdftotext`, and `/usr/bin/pdftoppm`, using `execFile` with fixed options and the active server-derived session directory. No shell expansion, user command, user path/session, arbitrary DPI, or output filename is accepted.
-- **Output boundary:** The finalizer writes only under `out/`. Inspection text and 96-DPI previews live under the sibling `analysis/` directory, are never included in the action outcome, cannot collide with staged input names, and are removed on release. The optional installed collector also scans only `out/`.
-- **Cleanup:** The complete per-run workspace is wiped in `finally` before the lease is reused; the session token is revoked. Source attachment retention remains owned by `attachments`; this feature intentionally retains only action-level artifact metadata.
-- **Draft-only AI output:** Parsed brief and drawing labels are advisory artifacts. No business entity is updated and later persistence requires a separately approved workflow/command.
-- **Resource bounds:** Maximum 48 pages, 96-DPI previews, 150-DPI final PNGs, 50 output files, subprocess timeout/output cap, at most three PDF-tool calls per turn (inspect, finalize, one corrected finalize), one shared workspace lease by default, and existing run timeout/admission control.
+- **Authorization / artifact-authorization:** Attachment IDs are re-resolved under trusted tenant and organization. The tool requires an active run/session for an allowed PDF agent; `finalize` additionally requires exact intake-agent identity. Page artifacts are resolved later only by source run + artifact ID + tenant + organization.
+- **Tenant isolation:** No scope/session/path/raw content is accepted from model input. A later handoff must fail closed on foreign run/artifact identity.
+- **Sensitive data / encrypted storage:** Raw text and page images remain only in scoped workspace/artifacts; tool responses, traces, errors, and business records contain no raw content. Handoff requires configured tenant artifact storage; installed capture encrypts bytes before durable storage and records no row on failed storage. A downstream temporary Attachment inherits canonical scoped storage and cleanup.
+- **Prompt injection:** The intake agent never reads document text/images, so embedded instructions do not enter its model context.
+- **Binary boundary:** Only MCP invokes fixed `/usr/bin/pdfinfo`, `/usr/bin/pdftotext`, and `/usr/bin/pdftoppm` via `execFile`.
+- **Output boundary:** Only the tool writes `brief.json`, `pdf-pages.json`, `pdf-page-####.png`, or `processing-error.json` under `out/`.
+- **Cleanup:** Complete per-run workspace is wiped before lease reuse; source retention remains owned by Attachments.
+- **Draft-only AI output:** N/A — deterministic artifact preprocessing only; no proposal or domain mutation.
+- **Resource bounds:** 48 pages; two JSON files + at most 48 PNGs (50 success artifacts under cap 50); AgentResult carries 2 references under its fixed cap 20; 150 DPI; subprocess timeout/output bounds; exactly one inspect and one finalize call.
 
 ## Integration Coverage
 
 | Test ID | Level | Setup / fixture | Actions | Assertions | Requirement IDs |
 |---|---|---|---|---|---|
-| TEST-001 | generation | Enabled `property_documents` module with valid agent/tool files | Run `yarn generate` | Generated manifest has stable IDs and artifact/file settings; generated OpenCode agent allows workspace read only, denies write/edit/bash, uses the fixed container root, and permits only the PDF/core outcome MCP tools | REQ-001, REQ-005 |
-| TEST-002 | tool integration | Temporary current-run workspace containing a deterministic mixed PDF; mocked active-session store | Call `inspect`, then `finalize` | Page-bounded text/previews and inspection hash are created; strict manifests/page partition are validated; exact selected final PNGs are atomically created; wrong agent/session, changed or uninspected input, malformed/encrypted/49-page inputs fail closed | REQ-001–REQ-005 |
-| TEST-003 | end-to-end smoke | Same-scope synthetic PDF containing one textual brief page plus visually distinct electrical/plumbing plan pages; configured model | Upload, invoke through the authenticated run API, inspect the trace and finalization response | Normative brief/manifest finalization; exactly one correctly numbered PNG per floor-plan page; types/evidence/provenance present; no PNG for the brief page; artifact action outcome lists both manifests | REQ-001–REQ-003 |
-| TEST-004 | security | Attachment owned by another tenant/org | Invoke agent with its UUID | Run fails before tool/model; no workspace output/artifact row/data leak | REQ-004 |
-| TEST-005 | boundary | 49-page PDF | Invoke agent | Only normative `processing-error.json`; no partial success manifests or PNG artifacts | REQ-004 |
-| TEST-006 | cleanup | Successful and injected-failure runs | Inspect workspace after completion | Per-run directory no longer exists in all mounted views | REQ-004 |
-| TEST-007 | regression | Inspected PDF plus a manifest that cites a plan page from a brief record and classifies one page twice | Finalize once, correct every reported invariant, then finalize again without re-inspection | First response reports both provenance and partition violations and leaves only `processing-error.json`; corrected retry succeeds and renders only validated plan pages | REQ-001–REQ-003 |
+| TEST-001 | generation | enabled module with valid agent/tool files | `yarn generate` | generated prompt makes exactly inspect/finalize calls, contains no analysis instructions, lists only `brief.json` + `pdf-pages.json` in the outcome, explains file-plane PNG capture, and denies shell/write/edit/document read | REQ-001–REQ-003, REQ-005 |
+| TEST-002 | tool integration | three-page workspace; mocked Poppler raw text includes layout/form feeds | inspect then empty-payload finalize | strict one-field brief equals aggregate text; strict inventory declares three ordered PNGs; output contains no `floor-plans.json`/preview/page-text files | REQ-001–REQ-005 |
+| TEST-003 | end-to-end smoke | same-scope representative PDF + configured tenant storage | await authenticated run, then inspect persisted artifacts | artifact result contains the two control references; captured rows contain retrievable controls plus every declared page PNG with matching names/MIME/run/scope; no model document reads or semantic manifest | REQ-001–REQ-004 |
+| TEST-004 | security | foreign attachment / wrong active agent / invalid token/path | invoke operations | fail closed; no leaked output | REQ-004 |
+| TEST-005 | boundary | 49-page PDF | invoke agent | only normative error; no partial success | REQ-004 |
+| TEST-006 | failure atomicity | inject failure on a middle/final render and missing aggregate text | finalize | only error artifact; no brief/PNG subset | REQ-001, REQ-002, REQ-004 |
+| TEST-007 | retired-agent regression | invoke `process_pdf` under retired `pdf_text_reader` identity | inspect | identity remains rejected; no retired files/profile/runtime entry is restored | REQ-005 |
+| TEST-008 | handoff eligibility | resolved intake invocation with complete set, then one missing/unreadable/extra/mistyped artifact variant | run shared RFQ validator | strict brief+inventory and complete PNG set pass eligibility; every mismatch is terminally rejected without polling or Attachment conversion | REQ-002, REQ-004 |
+| TEST-009 | deferred consumer guard | fully captured new-format run | invoke current plan and requirement commands | both raise `PDF_INTAKE_DOWNSTREAM_DEFERRED` before agent runtime, command-bus promotion, or semantic parsing; legacy artifact UI readability remains unchanged | REQ-002–REQ-004 |
 
 ## Implementation Phases
 
-### Phase 1 — Runtime and agent contract
+### Historical Phase 1 — Runtime and agent contract
 
 - **Depends on:** none
 - **Outcome:** The application discovers a file-enabled PDF intake agent and bounded MCP tool; every supported runtime topology provides one shared workspace and Poppler-capable MCP process.
 - **Why this order / value delivered:** Agent/tool generation, binary availability, and topology mounts must exist before an end-to-end run can be exercised.
 - **Deliverables:** `property_documents` metadata, `ai-tools.ts`, focused tool tests, `AGENT.md`, `OUTCOME.md`, `SAMPLE.json`, module registration, main Dockerfile dependency, file-plane environment/mount wiring, artifact cap.
 - **Independent slices / estimated commits:** one cohesive slice because discovery, session-bound tool execution, and runtime configuration form one executable security contract.
-- **Requirements closed:** REQ-001–REQ-005
-- **Tests:** TEST-001, TEST-002
+- **Historical baseline closed:** original 2026-09-18 requirements, superseded by the amendment requirements below
+- **Historical tests:** legacy focused tool and generation coverage
 - **Validation:** focused PDF-tool test; `yarn generate`; generated agent inspection; Compose config rendering; app/MCP image build; host/container utility smoke.
 - **Exit gate:** Generated agent denies bash and allows only the bounded PDF tool; tool boundary tests pass; every topology shares exact workspace paths; host and app/MCP image expose Poppler.
 
-### Phase 2 — End-to-end PDF exercise
+### Historical Phase 2 — End-to-end PDF exercise
 
-- **Depends on:** Phase 1 exit gate
-- **Outcome:** A representative mixed PDF produces complete parsed and visual artifacts under real tenant/org authorization.
+- **Depends on:** historical Phase 1 exit gate
+- **Outcome:** A representative mixed PDF produced the then-current parsed brief and visual artifacts under real tenant/org authorization.
 - **Why this order / value delivered:** Verifies the model/runtime contract only after the deterministic runtime surface is proven.
 - **Deliverables:** Synthetic smoke fixture/run evidence; any prompt corrections required by the observed output; no production fixture retained unless it defends a deterministic regression.
 - **Independent slices / estimated commits:** one sequential browser/API smoke because one run supplies all artifact and cleanup evidence.
-- **Requirements closed:** REQ-001–REQ-004
-- **Tests:** TEST-003–TEST-006
+- **Historical baseline closed:** original 2026-09-18 end-to-end requirements, superseded by the amendment requirements below
+- **Historical tests:** legacy end-to-end, scope, boundary, and cleanup coverage
 - **Validation:** Actual upload/run/trace inspection; focused generation/container checks after corrections; configured broad validation gate.
-- **Exit gate:** All acceptance criteria pass with finalization and outcome metadata inspected, inaccessible attachment and page-limit behavior fail closed, workspace cleanup is observed, and the full configured validation gate exits zero.
+- **Exit gate:** All then-current acceptance criteria passed with finalization and outcome metadata inspected, inaccessible attachment and page-limit behavior failing closed, workspace cleanup observed, and the configured validation gate exiting zero.
+
+### Phase 3 — Deterministic raw-text and page-image amendment
+
+- **Depends on:** historical Phases 1–2
+- **Outcome:** Existing agent emits exact raw text and every source page image, with no image/brief interpretation.
+- **Why this order / value delivered:** Establishes a lossless preprocessing boundary for later analysis and deletes duplicate semantic work.
+- **Deliverables:** amended specs; intake `AGENT.md`/`OUTCOME.md`; intake inspect/finalizer; strict page inventory; two-reference artifact result; complete file-plane capture; focused tests; regenerated runtime/profile/policy; RFQ-owned exact-set validator and deliberate consumer stop; documented downstream `AgentRunArtifact → Attachment` boundary; dependent RFQ spec marked for separate image-analysis/materialization.
+- **Independent slices / estimated commits:** one cohesive contract cutover across source prompt, tool schema/output, generated runtime, tests, current consumer validator/guard, and dependent documentation.
+- **Requirements closed:** REQ-001–REQ-005
+- **Tests:** TEST-001–TEST-009
+- **Validation:** focused tests; `yarn generate`; generated source/profile/MCP schema/effective policy inspection; `yarn typecheck`; `yarn lint`; `yarn build`; fresh live smoke with configured artifact storage when MCP/OpenCode are available.
+- **Exit gate:** Fresh run produces exact one-field brief, strict page inventory, and exactly one ordered PNG per PDF page in scoped persisted artifacts with retrievable bytes; AgentResult contains the two control references; the post-return validator accepts only that complete set; current RFQ consumers stop before semantic/promotion calls; no `floor-plans.json`, model document read, or current-stage analysis; unchanged scope/cleanup; green required validation.
 
 ## Implementation Status
 
@@ -309,75 +301,97 @@ Source doc: `.ai/specs/2026-09-18-pdf-brief-floor-plan-agent.md`
 
 | Phase | State | Dependencies | Acceptance IDs | Focused validation | Exit gate |
 |---|---|---|---|---|---|
-| Phase 1 — Runtime and agent contract | completed | none | AC-001–AC-005 | 21 focused tests; `yarn generate`; three Compose configs; Poppler runtime check; production OpenCode image | Generated agents deny bash/write/edit and can read only server-authored analysis paths; bounded tool, metadata, and topology contracts pass |
-| Phase 2 — End-to-end PDF exercise | completed | Phase 1 | AC-001–AC-004 | authenticated PDF run and trace; live agent/source-metadata APIs; inaccessible attachment failure; workspace cleanup; full configured gate | Finalization, scope failure, page limit, cleanup, discovery, metadata, and full gate verified |
+| Historical Phase 1 — Runtime and agent contract | completed | none | historical 2026-09-18 baseline | 21 focused tests; `yarn generate`; three Compose configs; Poppler runtime check; production OpenCode image | Generated agents deny bash/write/edit and can read only server-authored analysis paths; bounded tool, metadata, and topology contracts pass |
+| Historical Phase 2 — End-to-end PDF exercise | completed | historical Phase 1 | historical 2026-09-18 baseline | authenticated PDF run and trace; live agent/source-metadata APIs; inaccessible attachment failure; workspace cleanup; full configured gate | Finalization, scope failure, page limit, cleanup, discovery, metadata, and full gate verified |
+| Phase 3 — Deterministic raw-text and page-image amendment | implemented; live persistence smoke pending | historical Phases 1–2 | AC-001–AC-006 | deterministic artifact regression; retired-agent regression; RFQ eligibility/guard regression; runtime parity; direct Poppler smoke; required gate | Strict raw brief + page inventory + all page PNGs; no semantic manifest/analysis; downstream consumers explicitly deferred |
 
-### Phase 1 progress
+### Historical Phase 1–2 progress
 
 - [x] Runtime and agent contract implemented: module, bounded tool, generated policy hardener, Poppler runtime, topology mounts, schemas, and focused tests.
 - [x] Phase 2 final gate: trace `06404ece-6b10-40ef-9b40-ee0593d72089`; 21 tests; 227 design-system files; production build; live source metadata returned for both agents; final review found no remaining Critical/Important defects.
+
+
+### Phase 3 progress
+
+- [x] Remove model brief/image interpretation and semantic finalization input.
+- [x] Emit strict raw brief, strict page inventory, and all page PNGs; remove `floor-plans.json`.
+- [x] Keep the AgentResult within two control references; validate the exact scoped persisted set after invocation return.
+- [x] Replace current RFQ semantic consumers with the explicit deferred guard while preserving historical artifact readability.
+- [x] Preserve the existing retirement of `pdf_text_reader`; do not restore its files, profile, ID, or tool authorization.
+- [x] Run generation, focused tests, typecheck, lint, full tests, build, and a real four-page Poppler smoke.
+- [ ] Exercise encrypted `AgentRunArtifact` persistence in a fresh live app/MCP/OpenCode run; no live runtime process was available during this implementation session.
 
 ## Requirement Traceability
 
 | Requirement | Journey / surface | Data/API/event contracts | Reference capability and mechanism | Phase | Tests | Acceptance criterion |
 |---|---|---|---|---|---|---|
-| REQ-001 | J-001/J-002, existing Playground/workflow | Additive agent ID + `brief.json` + scoped MCP tool | `src/modules/agent_examples/agents/deals_health_check/AGENT.md`; emitted-example file-agent discovery plus framework-only app tool | Phase 1–2 | TEST-001–TEST-003 | AC-001 |
-| REQ-002 | J-001/J-002 | PNG artifact naming + render operation | `src/modules/agent_examples/agents/deals_health_check/OUTCOME.md`; framework-only file-plane artifact output | Phase 1–2 | TEST-001–TEST-003, TEST-005 | AC-002 |
-| REQ-003 | J-001/J-002 | Normative `floor-plans.json` v1 contract | `src/modules/agent_examples/agents/deals_health_check/SAMPLE.json`; emitted-example sample/discovery | Phase 1–2 | TEST-003 | AC-003 |
-| REQ-004 | J-001/J-002 | Existing attachment/session/artifact contracts + active-run tool guard | Installed Agent Orchestrator attachment stager; framework-only config | Phase 1–2 | TEST-002, TEST-004–TEST-006 | AC-004 |
-| REQ-005 | Runtime | Exact topology matrix, main image dependency, shared workspace | main `Dockerfile`, three named Compose files; framework-only deployment configuration | Phase 1 | TEST-001, TEST-002 | AC-005 |
+| REQ-001 | J-001/J-002, Playground/workflow | strict raw `brief.json`; inspect/finalize | emitted-example file-agent + framework-only app tool | Phase 3 | TEST-001–TEST-003 | AC-001 |
+| REQ-002 | J-001/J-002 | strict `pdf-pages.json` + exact scoped brief/inventory/page `AgentRunArtifact` set | installed file-plane capture + RFQ-owned eligibility validator + downstream artifact-to-Attachment boundary | Phase 3 | TEST-001–TEST-003, TEST-005, TEST-006, TEST-008, TEST-009 | AC-002 |
+| REQ-003 | J-001/J-002 | removed floor manifest/prompt analysis + explicit RFQ consumer stop | generated prompt/profile/MCP contract + current RFQ commands | Phase 3 | TEST-001–TEST-003, TEST-009 | AC-003, AC-006 |
+| REQ-004 | J-001/J-002 | existing attachment/session/artifact guards + scoped exact-set validation | installed stager + active-run tool guard + RFQ validator | Phase 3 | TEST-002, TEST-004–TEST-006, TEST-008, TEST-009 | AC-004, AC-006 |
+| REQ-005 | Runtime | topology + retired-agent rejection | existing runtime configuration | Phase 3 | TEST-001, TEST-002, TEST-007 | AC-005 |
 
 ## Rollout, Migration, and Rollback
 
-No database migration. Rollout order:
+No database migration.
 
-1. install `poppler-utils` on the hybrid-development host and in the main app/MCP Docker image;
-2. run `yarn generate` so the agent and MCP tool registries contain the new stable IDs;
-3. for `docker-compose.yml`, enable the file plane and keep the existing host bind mount `./.mercato/opencode-work:/home/opencode/work`;
-4. for `docker-compose.fullapp.dev.yml` and `docker-compose.fullapp.yml`, mount one named `opencode_work` volume at `/home/opencode/work` in `app`, `mcp`, and `opencode`;
-5. set the topology-matrix environment exactly, including `OM_OPENCODE_FILES_ENABLED=true`, matching workspace roots, and `OM_AGENT_ARTIFACT_MAX_COUNT=50` on the run-owning app;
-6. restart app, MCP, and OpenCode, then run tool integration and synthetic end-to-end smoke checks.
+### Migration & Backward Compatibility
 
-Rollback: disable `OM_OPENCODE_FILES_ENABLED`, remove `property_documents` from enabled modules, regenerate, and restart. Existing runs/artifacts remain readable under existing authorization/retention rules. Removing Poppler later has no database or HTTP API migration impact. The additive agent/tool IDs must not be repurposed.
+- Stable: agent/tool IDs, run API, result kind, attachment envelope, authorization, workspace topology, artifact cap, and error artifact.
+- Intentional cutover: `brief.json` becomes strict `{ "brief": string }`; strict non-semantic `pdf-pages.json` declares the ordered image set; `floor-plans.json` is removed; selected `floor-plan-page-####.png` becomes captured `pdf-page-####.png` artifacts for every page; `finalize` accepts only `{ operation: "finalize" }`; inspect drops previews/page-text outputs.
+- The already-retired `pdf_text_reader` remains absent and rejected; this amendment does not restore it.
+- `src/modules/rfq_intake/commands/analysis.ts` now owns the reusable post-invocation complete-set validator and replaces both invalid legacy semantic paths with bounded `PDF_INTAKE_DOWNSTREAM_DEFERRED` stops. The approved dependent RFQ spec reuses that validator and owns idempotent `AgentRunArtifact → Attachment` materialization for every page, one image-analysis call per page, and one whole-brief matcher call. Historical artifacts remain readable through the installed artifact surface but are not reprocessed by the invalid legacy path.
+- Historical run artifacts remain unchanged/readable. External consumers must distinguish by run date or artifact set.
+
+Rollout:
+
+1. update the PDF intake prompt/outcome, tool schema/finalizer, focused tests, and dependent spec;
+2. generate and inspect runtime registry/profile/MCP schema/effective policy;
+3. restart app, standalone MCP, and OpenCode;
+4. run focused retirement/eligibility regressions and fresh intake smoke.
+
+Rollback restores prompt/tool/outcome together, regenerates, and restarts; historical artifacts are never rewritten.
 
 ## Risks and Tradeoffs
 
 | Risk / tradeoff | Impact | Mitigation / detection | Residual risk |
 |---|---|---|---|
-| Prompt injection embedded in PDF | Agent may attempt irrelevant tool actions | No bash/network/domain mutation/sub-agent tools; MCP uses fixed `execFile` binaries and current-run paths; explicit untrusted-data instruction; trace inspection | Model can still misclassify content |
-| Drawing misclassification | Wrong/missing images or discipline labels | Confidence/evidence fields, exact taxonomy, source-page provenance, `unknown`/`mixed`, representative smoke | Classification remains probabilistic |
-| Large raster output | Storage/runtime exhaustion | 48-page, 96/150-DPI, 50-artifact, subprocess, per-file byte, and run-time caps | Dense A0 drawings may still approach byte cap |
-| No durable artifact storage | Generated file bytes are not downloadable after sandbox cleanup | User explicitly accepted action-level `kind: artifact` metadata; finalization response and trace prove the generated file set; deployments may independently configure `storageService` | Later consumers that require bytes must add a storage provider |
-| Password-protected/malformed PDF | Processing failure | Deterministic inspection and normative error artifact; no partial success | No recovery in this phase |
-| Runtime workspace skew | Tool/agent cannot see the same files | Explicit three-topology matrix; one shared mount; config and containment tests | Operator overrides can still misconfigure paths |
-| New system package increases image/host maintenance | Larger operational surface | `--no-install-recommends`, apt cache removal, documented host prerequisite, image scanning | Poppler updates require host/image refresh |
+| Every page is rendered | More bytes/time than selected plans | Existing 48-page, 150-DPI, artifact-count, timeout, and atomic-failure bounds | Dense drawings can still be expensive |
+| Downstream receives non-plan images | Room extraction must safely return no rooms for unsupported pages | Approved dependent contract analyzes every ordered page without preprocessing classification | Extra bounded vision calls are intentional |
+| Raw content is sensitive | Authorized readers receive full text/images | Scoped/encrypted artifacts, no raw traces/errors/business state, cleanup | Exposure to authorized artifact readers is intentional |
+| JSON escaping mistaken for normalization | Serialized bytes differ from text bytes | Compare parsed string with aggregate Poppler file | JSON control-character escaping is unavoidable |
+| Restoring stale text-reader assumptions | Reintroduces a retired agent and widens authorization | Keep current deletion/rejection tests; remove obsolete shared-reader requirements from this amendment | Historical text-reader spec remains archival only |
+| Artifact is mistaken for downstream Attachment | Next file-agent cannot stage input | Explicit handoff contract requires scoped validation and idempotent materialization; never pass artifact IDs in `__files.attachments` | Adapter implementation remains part of the later flow slice |
+| Installed capture is best-effort after run completion | Result row can show success while storage leaves an incomplete artifact set | Validate only after invocation return; require configured storage, exact scoped rows, and retrievable bytes | Status-only observers must not start handoff; crash before capture requires rerun |
+| Unknown external consumer expects old artifacts | Break on missing manifest/renamed images | Migration/changelog; stable run/agent IDs; clean historical artifacts | Undisclosed scripts need manual migration |
 
 ## Acceptance Criteria
 
-- [x] **AC-001** — A same-scope PDF with brief pages produces normative schemaVersion 1 `brief.json` data with required fields, bounds, and source-page provenance.
-- [x] **AC-002** — Every detected floor-plan page produces exactly one `floor-plan-page-####.png` during finalization; brief, elevation, section, detail, schedule, cover, legend-only, and unrelated pages produce none.
-- [x] **AC-003** — Normative `floor-plans.json` covers every source page exactly once across brief/plan/other sets and has a one-to-one plan-to-PNG mapping with bounded typed metadata.
-- [x] **AC-004** — Cross-scope/missing inputs fail before tool/model; same-scope invalid/over-limit PDFs produce only normative `processing-error.json`; per-run workspace is removed after success/failure.
-- [x] **AC-005** — Hybrid, full-app development, and full-app production configurations match the topology matrix; generated agent denies bash/write/edit; only the app/MCP process exposes Poppler.
-- [x] Existing Playground/Agents surfaces remain unchanged and show the new generated agent through discovery.
-- [x] The configured validation gate passes.
+- [ ] **AC-001** — Same-scope PDF produces strict `brief.json` with exactly one `brief` field equal to complete server-owned `pdftotext -layout` output.
+- [ ] **AC-002** — With configured tenant storage, a PDF with `N` pages produces strict `pdf-pages.json` plus exactly `N` non-empty `pdf-page-####.png` files and the same scoped, byte-retrievable `AgentRunArtifact` rows; AgentResult stays within two control references; post-return validation rejects any missing, extra, unreadable, mistyped, or out-of-sequence file.
+- [ ] **AC-003** — New successful runs contain no `floor-plans.json`, `floor-plan-page-*`, parsed brief fields, preview/page-text artifacts, or model document read/analysis.
+- [ ] **AC-004** — Scope/input/hash/runtime/render failures leave only normative `processing-error.json`; failed artifact storage creates no dangling row; cleanup remains unchanged.
+- [ ] **AC-005** — Retired `pdf_text_reader` files/profile/runtime entry/tool authorization remain absent; generated registry/profile/MCP/policy agree after restart; the result/run exposes sufficient identity for a later scoped artifact-to-Attachment adapter without treating an artifact ID as an Attachment ID.
+- [ ] **AC-006** — On a fully captured new-format run, both current RFQ analysis commands raise `PDF_INTAKE_DOWNSTREAM_DEFERRED` before semantic agent, brief parsing, or proposal-only promotion calls; the later RFQ spec explicitly reuses the complete-set validator.
+- [ ] Existing Playground/Agents surfaces remain unchanged.
+- [ ] Focused tests, `yarn generate`, `yarn typecheck`, `yarn lint`, and `yarn build` pass; fresh live smoke is recorded when runtime is available.
 
 ## Final Compliance Report
 
 | Check | Status | Evidence / resolution |
 |---|---|---|
-| Applicable `AGENTS.md` files and routed guides/skills reviewed | pass | Root rules; `ai-workflows`; attachments and ai-assistant facts; installed Agent Orchestrator guide; `om-create-ai-agent`; `om-spec-writing` |
-| Data models, APIs, events, UI, and tests are internally consistent | pass | No DB/HTTP/event/UI change; normative artifacts, additive MCP tool, topology matrix, and traceability are explicit |
-| Every workflow completes end to end without a catch-all integration phase | pass | J-001/J-002 and Phase 1/2 exit gates |
-| Platform-native reuse and extension points were chosen before custom code | pass | Existing attachments, file-agent discovery, runtime handler, artifact capture, Playground and workflow activity reused |
-| UI contracts identify references, canonical components, and theme/state coverage | pass | No UI change; installed Playground/Agents surfaces named explicitly |
-| Every phase has dependencies, bounded slices, tests, value, and an observable exit gate | pass | Phase 1 and Phase 2 sections |
+| Applicable rules/guides/skills reviewed | pass | root rules; compatibility; AI/file-agent/attachments guidance; matching lesson |
+| Data/API/artifact/test contracts internally consistent | pass | strict brief + strict page inventory + all-page PNG capture; installed 0.8.0 result/capture limits and timing are explicit; RFQ-owned validator requires exact retrievable control/page rows after invocation return |
+| Scope is one deployable capability | pass | deterministic preprocessing cutover plus reusable current-consumer validator/guard; image analysis/materialization remain deferred |
+| Platform-native reuse precedes custom code | pass | existing stager, run, tool, Poppler, encrypted capture, and cleanup reused |
+| UI contract complete | pass | no UI change |
+| Phase has dependencies, tests, value, exit gate | pass | Phase 3 |
 
-Verdict: Implemented
+Verdict: Ready for implementation — written amendment and 48-page file-plane strategy approved
 
 ## Open Questions
 
-N/A — dependency, individual PNG format, parsed-brief shape, plan-view taxonomy, bounded MCP execution, runtime topology, and action-level artifact retention were resolved with the user on 2026-09-18.
+N/A for this amendment — user selected strict raw `brief.json`, PNG for every page, deferred image analysis, encrypted run-artifact handoff, and preservation of 48-page support through file-plane capture rather than enumerating every PNG in the capped AgentResult on 2026-09-19.
 
 ## Changelog
 
@@ -389,3 +403,10 @@ N/A — dependency, individual PNG format, parsed-brief shape, plan-view taxonom
 | 2026-09-18 | Implemented and exercised the bounded PDF agent; user selected action-level artifact metadata without S3 or another durable artifact store. |
 | 2026-09-18 | Corrected semantic finalization recovery after trace `6d63c741-526b-4610-b46a-9e3932de6b3c`: nested brief provenance must stay within `briefPages`, validation reports all actionable violations, one corrected retry is allowed, and artifact outcome examples include the required discriminator and paths. |
 | 2026-09-18 | Reloaded the standalone MCP tool bundle and OpenCode agent profile, then verified the corrected flow end to end in trace `a2e9b325-1027-4a61-988d-0d3caa4144bf`: the first semantic rejection named the duplicate page, the agent retried once, finalization succeeded, and the complete artifact outcome was accepted on its first submission. |
+| 2026-09-19 | Drafted the approved raw-brief amendment: `brief.json` becomes strict `{ "brief": string }` from server-owned full-document `pdftotext -layout`; model-authored brief interpretation is removed while plan extraction, filenames, scope, and runtime controls remain stable. |
+| 2026-09-19 | Revised per user feedback: removed `floor-plans.json` and all current-stage image analysis; success is strict raw `brief.json` plus `pdf-page-####.png` for every source page. |
+| 2026-09-19 | Made every page PNG an explicit result artifact persisted as scoped `AgentRunArtifact`; documented the required downstream idempotent artifact-to-Attachment bridge before another file-agent can consume it. |
+| 2026-09-19 | Corrected the handoff contract against installed Agent Orchestrator 0.8.0: capture is durable per file but best-effort after run completion, so later flow checks exact scoped rows/bytes; identified and guarded the implemented legacy RFQ consumer. |
+| 2026-09-19 | Resolved review findings: Phase 3 owns a reusable post-invocation exact-set validator covering `brief.json`, `pdf-pages.json`, and all PNGs; current RFQ consumers stop with `PDF_INTAKE_DOWNSTREAM_DEFERRED`; approved dependent RFQ work owns whole-brief matching, every-page analysis, and materialization. |
+| 2026-09-19 | Resolved installed `AgentResult.artifacts.max(20)`: user kept 48-page support; added strict non-semantic `pdf-pages.json`, limited AgentResult to two control references, and made scoped file-plane rows the authoritative PNG handoff. Preserved the pre-existing retirement of `pdf_text_reader`. |
+| 2026-09-19 | Implemented the deterministic cutover, generated the no-read two-reference profile, added exact scoped RFQ artifact validation plus deferred guards, passed focused/full/type/lint/build gates, and verified a real four-page PDF through Poppler. Fresh encrypted file-plane persistence remains a live-runtime QA boundary. |
