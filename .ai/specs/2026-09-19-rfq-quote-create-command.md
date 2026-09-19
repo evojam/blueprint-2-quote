@@ -15,7 +15,7 @@ A **temporary probe agent** ships with it, whose only purpose is to exercise tha
 
 The RFQ analysis chain ends with catalog matches and no priced document. Composing a quote requires arithmetic over measurements — wall areas minus openings, floor polygons minus voids, summed runs, counted fixtures — and a price lookup per line. Both are things a language model does unreliably and code does exactly.
 
-The seeded renovation catalog (`src/modules/catalog_seed/data/renovation-catalog.ts`, 46 services) shows why the split matters. Services bill in four units: `szt` (27 services), `m2` (11), `mb` (5), `kpl` (2). A model asked for a finished quantity has to silently pick a unit convention, a multiplication, and a deduction rule per service, with no place to record which it chose.
+The seeded renovation catalog (`src/modules/catalog_seed/data/renovation-catalog.ts`, 45 services) shows why the split matters. Services bill in four units: `szt` (27 services), `m2` (11), `mb` (5), `kpl` (2). A model asked for a finished quantity has to silently pick a unit convention, a multiplication, and a deduction rule per service, with no place to record which it chose.
 
 Multi-variant services make the stakes concrete. Wall painting (`REN-FIN-01`) carries three paint variants at 40, 55 and 65 PLN/m²; floor panels (`REN-FIN-07`) three at 70, 90 and 130. A wrong variant is a 60%+ error on the line, and nothing downstream catches it: **every price field on a Sales quote line is optional**, so `sales.quotes.create` will happily persist a quote whose lines carry no price at all.
 
@@ -185,7 +185,7 @@ The shape is also the extension point. A future work type arrives as one more un
 
 The schema is non-strict: unknown keys are stripped. There is no `currencyCode`, no price field, no `customerEntityId`, no `channelId` and no scope key — those are derived, never accepted.
 
-`variantId` is optional; omitted, the command falls back to the product's `isDefault` variant, which the seed sets for all 46 services. A `variantId` belonging to a **different** product is always a rejection of that item, never a substitution.
+`variantId` is optional; omitted, the command falls back to the product's `isDefault` variant, which the seed sets for all 45 services. A `variantId` belonging to a **different** product is always a rejection of that item, never a substitution.
 
 ### The unit gate
 
