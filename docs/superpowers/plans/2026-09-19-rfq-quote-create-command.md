@@ -973,8 +973,24 @@ it('accepts the V2 envelope and returns no quote when it contains no rooms', asy
 - Modify: `src/modules/rfq_intake/__tests__/quote-create-command.test.ts`
 
 **Interfaces:**
-- Consumes: `resolveQuantity`, `acceptedUnitsFor` (Task 6), `resolveUnitPrice` (Task 4), `runCommand` from `../lib/commandBus`.
+- Consumes: `loadQuotableProduct`, `resolveUnitPrice` (Task 4), `resolveQuantity`, `acceptedUnitsFor` (Task 6), `runCommand` from `../lib/commandBus`.
 - Produces: `QuoteCreateResult` carrying a real `quoteId`.
+
+**Order of operations per item, then aggregation before pricing:**
+
+`loadQuotableProduct` → `resolveQuantity` → unit gate → **group** → `resolveUnitPrice` once per group.
+
+Items are aggregated by `(productId, variantId)` **before** any price is resolved. This is not cosmetic: `resolvePrice(rows, { quantity })` is quantity-dependent, and `catalog_product_variant_prices` carries `minQuantity` tiers, so quoting 8 m² and 12 m² as two lines can land in a different tier than 20 m² as one. The customer is buying twenty metres of painting, not eight and twelve.
+
+It is inert against today's seed — `catalog_seed` writes exactly one price row per variant at `MIN_QUANTITY = 1`, so there is only one tier — which is a fact about the seeded data, not about the contract. The first real price list with tiers would otherwise change a quote silently.
+
+Grouping rules:
+
+- Key is `(productId, variantId)` after `loadQuotableProduct` has resolved the variant, so an item that named no variant groups with one that named the default explicitly.
+- Quantities are summed and re-rounded to two decimals. Units cannot disagree inside a group, because the unit gate already forced every member to match the product's `defaultUnit`.
+- `note` values are joined with `, ` into the line `description`, so the per-room breakdown survives as text rather than as separate lines.
+- An item dropped by any gate never reaches a group. A group whose members were all dropped produces no line.
+- Warnings keep the **original** `itemIndex`, not the group index — the operator has to find the item they wrote.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1012,10 +1028,43 @@ it('drops outliers when lines resolve to mixed currencies', async () => {
   expect(salesCalls[0].input.lines).toHaveLength(1)
   expect(result.warnings).toContain('currency_outlier_dropped')
 })
+
+it('merges two items naming the same product and variant into one summed line', async () => {
+  // Painting the salon (8 m²) and the kitchen (12 m²) is twenty metres of one service,
+  // not two purchases. Pricing sees 20 so a quantity tier resolves against the real total.
+  const result = await createQuoteCommand.execute(paintingTwoRoomsInput, makeCtx())
+  expect(salesCalls[0].input.lines).toHaveLength(1)
+  expect(salesCalls[0].input.lines[0]).toMatchObject({ productId: paintProductId, quantity: 20 })
+  expect(pricingCalls.map((c) => c.quantity)).toEqual([20])
+  expect(result.lineCount).toBe(1)
+})
+
+it('keeps the per-room notes of merged items in the line description', async () => {
+  await createQuoteCommand.execute(paintingTwoRoomsInput, makeCtx())
+  expect(salesCalls[0].input.lines[0].description).toBe('salon, kuchnia')
+})
+
+it('keeps different variants of one product on separate lines, since they are priced apart', async () => {
+  // REN-FIN-01 standard at 40 and premium at 65 are different purchases.
+  const result = await createQuoteCommand.execute(paintingTwoVariantsInput, makeCtx())
+  expect(salesCalls[0].input.lines).toHaveLength(2)
+  expect(result.lineCount).toBe(2)
+})
+
+it('groups an item that named no variant with one that named the default explicitly', async () => {
+  // loadQuotableProduct resolves the default first, so both reach the same group key.
+  await createQuoteCommand.execute(implicitAndExplicitDefaultVariantInput, makeCtx())
+  expect(salesCalls[0].input.lines).toHaveLength(1)
+})
+
+it('reports a dropped item against the index the operator wrote, not the group index', async () => {
+  const result = await createQuoteCommand.execute(secondItemUnpriceableInput, makeCtx())
+  expect(result.warnings).toContain('no_price:1')
+})
 ```
 
 - [ ] **Step 2: Run them and confirm they fail.**
-- [ ] **Step 3: Implement** the loop: `resolveQuantity`, then `resolveUnitPrice` with that quantity; compare the produced unit against `acceptedUnitsFor(...)` and the product's `defaultUnit`; drop with a bounded warning on any failure. Pick the majority currency and drop outliers. With at least one surviving line, call `runCommand(ctx, 'sales.quotes.create', { tenantId, organizationId, currencyCode, metadata, lines })`. Resolve `customerEntityId` from the deal's single linked company (`customer_deal_companies`), else its primary person (`customer_deal_people` where `is_primary`), omitting the field when neither exists.
+- [ ] **Step 3: Implement** the loop and the grouping. Per item: `loadQuotableProduct`, then `resolveQuantity`, then the unit gate (`acceptedUnitsFor(basis)` against the product's `defaultUnit`), dropping with a bounded warning carrying the original `itemIndex` on any failure. Then group the survivors by `(productId, variantId)`, summing quantities and joining `note` values with `, `. Call `resolveUnitPrice` **once per group** with the summed quantity, so a `minQuantity` tier resolves against the real total. Pick the majority currency and drop outliers. With at least one surviving line, call `runCommand(ctx, 'sales.quotes.create', { tenantId, organizationId, currencyCode, metadata, lines })`. Resolve `customerEntityId` from the deal's single linked company (`customer_deal_companies`), else its primary person (`customer_deal_people` where `is_primary`), omitting the field when neither exists.
 - [ ] **Step 4: Run the module suite and the gate.**
 
 Run: `yarn test src/modules/rfq_intake/__tests__/ && yarn generate && yarn typecheck && yarn lint`
