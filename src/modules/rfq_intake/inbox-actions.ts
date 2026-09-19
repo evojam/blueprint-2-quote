@@ -52,10 +52,30 @@ const RFQ_DEAL_SOURCE = 'inbox_ops:rfq'
  * Both consumers already cope: `buildDealTitle` falls back to the e-mail, and
  * `ensureContact` derives a person name from the address when the hint is missing.
  *
- * HACK(hackathon): the action-EDIT route still validates against the installed
- * `orderPayloadSchema` (`api/proposals/[id]/actions/[actionId]/route.ts:60`), so
- * hand-editing an RFQ action in the UI fails until line items and a currency are
- * filled in. Extraction and execution are unaffected.
+ * HACK(hackathon): one action type, two validation sources — and overriding the action
+ * replaces only one of them. Execution uses THIS schema (`executionEngine.ts:397`); the
+ * action-EDIT route uses the installed `orderPayloadSchema` through
+ * `validateActionPayloadForType`, whose `ACTION_PAYLOAD_SCHEMAS` map
+ * (`data/validators.ts:285`) is module-private and cannot be extended from here.
+ * Reproduced against `@open-mercato/core@0.8.0`: editing an RFQ action fails with
+ * "currencyCode: expected string, received undefined; lineItems: expected array,
+ * received undefined".
+ *
+ * What breaks: hand-editing an RFQ action in the UI. Extraction and execution are
+ * unaffected, and after the normalizer below there is no longer a reason to edit — so
+ * this is a dead end an operator can still walk into, not a blocked demo path.
+ *
+ * Not worked around on purpose. An API interceptor cannot reach it (the route is
+ * hand-written, with no interceptor bridge), a mutation guard runs after the check and
+ * can only permit or refuse, and stamping placeholder line items to satisfy a schema
+ * this action does not need would write fiction into the record. The remaining local
+ * option — overriding the route via `src/modules.ts` `entry.overrides` — means forking
+ * ~120 lines of installed logic (optimistic lock, guards, events, cache invalidation)
+ * and owning the drift.
+ *
+ * The real fix is upstream and benefits every consumer: the edit route should consult
+ * the registered definition's schema, as `executeByType` already does, and fall back to
+ * the map. See `.ai/lessons/inbox-action-override-owns-only-execution-schema.md`.
  */
 const rfqPayloadSchema = orderPayloadSchema
   .partial({ currencyCode: true, lineItems: true, customerName: true } as never)
