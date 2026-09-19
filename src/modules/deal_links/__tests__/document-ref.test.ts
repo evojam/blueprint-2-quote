@@ -3,6 +3,7 @@ import {
   decodeDocumentRef,
   encodeDocumentRef,
   isDocumentKind,
+  isLikelyUuid,
   type DocumentRef,
 } from '../lib/document-ref'
 
@@ -50,5 +51,29 @@ describe('document reference codec', () => {
     expect(isDocumentKind('order')).toBe(true)
     expect(isDocumentKind('invoice')).toBe(false)
     expect(isDocumentKind(null)).toBe(false)
+  })
+
+  // Client-side half of REQ-006: this is what enables/disables the document-side
+  // tab's "Link" button before the server ever sees the id.
+  describe('isLikelyUuid', () => {
+    it('accepts a well-formed uuid', () => {
+      expect(isLikelyUuid(QUOTE_ID)).toBe(true)
+    })
+
+    it('tolerates surrounding whitespace', () => {
+      expect(isLikelyUuid(`  ${QUOTE_ID}  `)).toBe(true)
+    })
+
+    it('rejects a non-uuid string', () => {
+      expect(isLikelyUuid('not-a-uuid')).toBe(false)
+    })
+
+    it('rejects an empty string', () => {
+      expect(isLikelyUuid('')).toBe(false)
+    })
+
+    it('rejects a kind-prefixed ref (the combobox value is the bare id here)', () => {
+      expect(isLikelyUuid(`quote:${QUOTE_ID}`)).toBe(false)
+    })
   })
 })

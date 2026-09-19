@@ -10,6 +10,8 @@ import { ComboboxInput } from '@open-mercato/ui/backend/inputs/ComboboxInput'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { createCrud, fetchCrudList } from '@open-mercato/ui/backend/utils/crud'
 import { loadDealOptions } from '../../../lib/deal-options'
+import { isLikelyUuid } from '../../../lib/document-ref'
+import { formatCreatedAt } from '../../../lib/format-date'
 import {
   applyLinkLabels,
   collectLookupIds,
@@ -19,32 +21,6 @@ import {
 } from '../../../lib/link-labels'
 
 type WidgetContext = { resourceId?: string; kind?: 'quote' | 'order' }
-
-/**
- * Deliberately looser than a strict UUID validator (no version/variant nibble
- * pinning) for the same reason `document-ref.ts` is loose: the server's
- * `z.string().uuid()` on `documentLinkCreateSchema` is the authority on what is
- * acceptable, and a stricter client-side check could reject an id the API would
- * have taken.
- */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-function isLikelyUuid(value: string): boolean {
-  return UUID_RE.test(value.trim())
-}
-
-/**
- * `created_at` renders as `dd/mm/yyyy` (matches the deal-side tab). Not
- * locale-aware — matches the rest of this hackathon module.
- */
-function formatCreatedAt(raw?: string | null): string {
-  if (!raw) return '—'
-  const date = new Date(raw)
-  if (Number.isNaN(date.getTime())) return '—'
-  const dd = String(date.getDate()).padStart(2, '0')
-  const mm = String(date.getMonth() + 1).padStart(2, '0')
-  return `${dd}/${mm}/${date.getFullYear()}`
-}
 
 export default function DocumentDealsWidget({ context }: InjectionWidgetComponentProps<WidgetContext>) {
   const t = useT()
@@ -167,7 +143,7 @@ export default function DocumentDealsWidget({ context }: InjectionWidgetComponen
             variant="outline"
             size="sm"
             className="h-9 rounded-lg px-3"
-            disabled={!isLikelyUuid(selected) || linking || !documentId}
+            disabled={!isLikelyUuid(selected) || linking || !documentId || !documentKind}
             onClick={linkSelected}
           >
             {t('deal_links.documentTab.link.submit', 'Link')}

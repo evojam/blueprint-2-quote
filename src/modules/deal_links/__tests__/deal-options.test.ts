@@ -52,8 +52,11 @@ describe('loadDealOptions', () => {
     expect(options).toEqual([{ value: DEAL_ID, label: 'Untitled deal' }])
   })
 
-  // There is exactly one source here, so there is nothing to degrade to: a
-  // failure must reach the caller rather than render as "no matches".
+  // There is exactly one source here, so there is nothing to degrade to: this
+  // loader must not manufacture an empty list on failure. `ComboboxInput`'s
+  // `loadSuggestions` effect is what actually absorbs the rejection
+  // (`.catch(() => {})`) and renders "No matches found" — that swallowing
+  // happens one layer above this function, not inside it.
   it('propagates a failure instead of swallowing it', async () => {
     await expect(loadDealOptions(undefined, t, fetcherFor(new Error('boom')))).rejects.toThrow(
       'boom',

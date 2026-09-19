@@ -4,18 +4,15 @@ import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { DealDocumentLink } from '../../data/entities'
 import { documentLinkCreateSchema } from '../../commands/document-links'
 import { documentLinksRouteAccess, DOCUMENT_LINK_ENTITY_ID } from '../../lib/route-access'
-import { buildDocumentLinkFilters } from '../../lib/document-links-filters'
+import {
+  buildDocumentLinkFilters,
+  documentLinksListQuerySchema,
+  type DocumentLinksListQuery,
+} from '../../lib/document-links-filters'
 
-const querySchema = z.object({
-  dealId: z.string().uuid().optional(),
-  documentId: z.string().uuid().optional(),
-  page: z.coerce.number().min(1).default(1),
-  pageSize: z.coerce.number().min(1).max(100).default(50),
-  sortField: z.string().optional().default('created_at'),
-  sortDir: z.enum(['asc', 'desc']).optional().default('desc'),
-})
+const querySchema = documentLinksListQuerySchema
 
-type Query = z.infer<typeof querySchema>
+type Query = DocumentLinksListQuery
 
 const listItemSchema = z.object({
   id: z.string(),
@@ -76,7 +73,7 @@ export const openApi: OpenApiRouteDoc = {
   summary: 'Links between a CRM deal and its sales documents',
   methods: {
     GET: {
-      summary: 'List the sales documents linked to a deal',
+      summary: 'List deal-to-document links',
       description:
         'Returns the links recorded for one deal, for one sales document, or for one deal-document pair, newest first. Supplying neither filter lists every link in scope.',
       tags: ['Deal links'],

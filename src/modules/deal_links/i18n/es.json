@@ -15,7 +15,7 @@
   "deal_links.kind.quote": "Quote",
   "deal_links.option.order": "Order {number}",
   "deal_links.option.quote": "Quote {number}",
-  "deal_links.state.empty": "No quote has been produced for this case yet.",
+  "deal_links.state.empty": "No quote or order has been linked to this case yet.",
   "deal_links.state.error": "Could not load the linked documents.",
   "deal_links.state.loading": "Loading…",
   "deal_links.tab.label": "Quotes and orders",
