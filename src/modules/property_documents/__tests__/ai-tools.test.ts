@@ -5,6 +5,10 @@ import { describe, expect, it, jest } from '@jest/globals'
 import { z } from 'zod'
 import type { McpToolContext } from '@open-mercato/ai-assistant/modules/ai_assistant/lib/types'
 import { getAgentEntry } from '@open-mercato/enterprise/modules/agent_orchestrator/lib/sdk/defineAgent'
+
+jest.mock('@open-mercato/ai-assistant/modules/ai_assistant/lib/agent-registry', () => ({
+  getAgent: jest.fn(() => undefined),
+}))
 import { ROOM_DIMENSIONS_AGENT_ID } from '../ai-agents'
 import {
   PDF_AGENT_ID,

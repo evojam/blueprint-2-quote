@@ -3,7 +3,11 @@ import { access, mkdtemp, mkdir, readFile, utimes, writeFile } from 'node:fs/pro
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { describe, expect, it } from '@jest/globals'
+import { describe, expect, it, jest } from '@jest/globals'
+
+jest.mock('@open-mercato/ai-assistant/modules/ai_assistant/lib/agent-registry', () => ({
+  getAgent: jest.fn(() => undefined),
+}))
 import { ensureAgentsLoaded, getAgentEntry } from '@open-mercato/enterprise/modules/agent_orchestrator/lib/sdk/defineAgent'
 import { PDF_TEXT_READER_AGENT_ID } from '../ai-agents'
 import '../ai-agents'
