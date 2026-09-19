@@ -137,7 +137,7 @@ describe('rfq_intake inbox action registry', () => {
 })
 
 describe('rfq_intake analysis workflow', () => {
-  it('chains PDF intake directly to catalog matching and declares no trigger of its own', async () => {
+  it('forks catalog matching and page measurements after PDF intake, then waits for both', async () => {
     const { workflowsConfig } = await import('../workflows')
     const workflow = workflowsConfig.workflows.find((entry) => entry.workflowId === 'rfq_intake.analysis')
     expect(workflow).toBeDefined()
@@ -147,7 +147,8 @@ describe('rfq_intake analysis workflow', () => {
       steps: Array<{
         stepId: string
         stepType: string
-        activities?: Array<{ activityType: string; config: Record<string, unknown> }>
+        config?: Record<string, unknown>
+        activities?: Array<{ activityType: string; async?: boolean; config: Record<string, unknown> }>
       }>
       transitions: Array<{ fromStepId: string; toStepId: string }>
       triggers?: Array<{ eventPattern: string; config?: { contextMapping?: Array<{ targetKey: string }> } }>
@@ -157,13 +158,23 @@ describe('rfq_intake analysis workflow', () => {
     expect(definition.steps.map((step) => step.stepType)).toEqual([
       'START',
       'AUTOMATED',
+      'PARALLEL_FORK',
       'AUTOMATED',
+      'AUTOMATED',
+      'PARALLEL_JOIN',
       'END',
     ])
+    expect(definition.steps.find((step) => step.stepId === 'analyze_parallel')?.config).toEqual({
+      joinStepId: 'analysis_complete',
+    })
+    expect(definition.steps.find((step) => step.stepId === 'analysis_complete')?.config).toEqual({
+      forkStepId: 'analyze_parallel',
+    })
 
     const activities = definition.steps.flatMap((step) => step.activities ?? [])
     expect(activities.map((activity) => activity.activityType)).toEqual([
       'INVOKE_AGENT',
+      'UPDATE_ENTITY',
       'UPDATE_ENTITY',
     ])
     expect(activities[0]!.config).toMatchObject({
@@ -172,21 +183,39 @@ describe('rfq_intake analysis workflow', () => {
         __files: '{{context.__files}}',
       },
     })
-    expect(activities[1]!.config).toEqual({
-      commandId: 'rfq_intake.requirements.match',
-      input: {
-        tenantId: '{{workflow.tenantId}}',
-        organizationId: '{{workflow.organizationId}}',
-        workflowInstanceId: '{{workflow.instanceId}}',
-        stepId: 'match_catalog',
+    expect(activities[1]).toMatchObject({
+      async: true,
+      config: {
+        commandId: 'rfq_intake.requirements.match',
+        input: {
+          tenantId: '{{workflow.tenantId}}',
+          organizationId: '{{workflow.organizationId}}',
+          workflowInstanceId: '{{workflow.instanceId}}',
+          stepId: 'match_catalog',
+        },
       },
     })
-    expect(JSON.stringify(definition)).not.toContain('rfq_intake.deal.advance')
-    expect(JSON.stringify(definition)).not.toContain('rfq_intake.plans.analyze')
+    expect(activities[2]).toMatchObject({
+      async: true,
+      config: {
+        commandId: 'rfq_intake.measure-rooms',
+        input: {
+          tenantId: '{{workflow.tenantId}}',
+          organizationId: '{{workflow.organizationId}}',
+          workflowInstanceId: '{{workflow.instanceId}}',
+          dealId: '{{workflow.dealId}}',
+          stepId: 'measure_rooms',
+        },
+      },
+    })
     expect(definition.transitions).toEqual([
       { transitionId: 't_start', transitionName: 'Start', fromStepId: 'start', toStepId: 'extract_pdf', trigger: 'auto' },
-      { transitionId: 't_match', transitionName: 'Match', fromStepId: 'extract_pdf', toStepId: 'match_catalog', trigger: 'auto' },
-      { transitionId: 't_done', transitionName: 'Done', fromStepId: 'match_catalog', toStepId: 'end', trigger: 'auto' },
+      { transitionId: 't_analyze', transitionName: 'Analyze', fromStepId: 'extract_pdf', toStepId: 'analyze_parallel', trigger: 'auto' },
+      { transitionId: 't_match', transitionName: 'Match', fromStepId: 'analyze_parallel', toStepId: 'match_catalog', trigger: 'auto' },
+      { transitionId: 't_measure', transitionName: 'Measure', fromStepId: 'analyze_parallel', toStepId: 'measure_rooms', trigger: 'auto' },
+      { transitionId: 't_match_complete', transitionName: 'Catalog complete', fromStepId: 'match_catalog', toStepId: 'analysis_complete', trigger: 'auto' },
+      { transitionId: 't_measure_complete', transitionName: 'Measurements complete', fromStepId: 'measure_rooms', toStepId: 'analysis_complete', trigger: 'auto' },
+      { transitionId: 't_done', transitionName: 'Done', fromStepId: 'analysis_complete', toStepId: 'end', trigger: 'auto' },
     ])
     expect(definition.triggers ?? []).toEqual([])
   })
@@ -196,13 +225,10 @@ describe('rfq_intake analysis workflow', () => {
     const { workflowsConfig } = await import('../workflows')
     const workflow = workflowsConfig.workflows.find((entry) => entry.workflowId === 'rfq_intake.analysis')!
 
-    // registerCodeWorkflows DROPS a definition that fails this schema, silently
-    // except for a log line — so an INVOKE_AGENT activity that the shared
-    // `ActivityType` union does not know must still pass here.
-    const result = workflowDefinitionDataSchema.safeParse(workflow.definition)
-    expect(result.success).toBe(true)
+    expect(workflowDefinitionDataSchema.safeParse(workflow.definition).success).toBe(true)
   })
 })
+
 
 describe('rfq_intake start-rfq-analysis subscriber', () => {
   it('only routes RFQ cases, not real quotes', async () => {

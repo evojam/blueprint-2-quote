@@ -1,13 +1,13 @@
 # RFQ Inbox Action and Agent Process
 
 **Date**: 2026-09-19
-**Status**: Draft
+**Status**: Ready for implementation
 
 > Hackathon-mode specification: lean by design. Sections that a longer-lived feature would carry (full UI contracts, rollout choreography, exhaustive alternatives) are marked `N/A` with the reason. The Ask First and Never lists in `AGENTS.md` still apply in full.
 
 ## TLDR
 
-The AI Action Inbox (`inbox_ops`) already turns an incoming e-mail into reviewable proposed actions, and `sales` already executes one of them into a draft quote. What is missing is everything after acceptance: a quote created from a property RFQ sits inert while the PDF brief and floor plans attached to the same e-mail go unread. This specification adds the app-owned seam that closes the gap — accepting the inbox action guarantees the customer exists in the CRM, saves the RFQ as a `CustomerDeal` owned by that customer, and runs the e-mail's PDF through the agent chain `pdf_intake → room_dimensions → catalog_matcher`, so an operator reviewing a proposal is starting an agentic analysis rather than only filing a record. It is the first segment of a process that will eventually run through to pricing and a CRM offer awaiting human approval.
+The AI Action Inbox (`inbox_ops`) already turns an incoming e-mail into reviewable proposed actions, and `sales` already executes one of them into a draft quote. What is missing is everything after acceptance: a quote created from a property RFQ sits inert while the PDF brief and floor plans attached to the same e-mail go unread. This specification adds the app-owned seam that closes the gap — accepting the inbox action guarantees the customer exists in the CRM, saves the RFQ as a `CustomerDeal` owned by that customer, and runs the e-mail PDF through `pdf_intake`, then parallel catalog matching and per-rendered-page `room_measurements` extraction. An operator therefore starts an agentic analysis rather than only filing a record.
 
 ## Problem Statement
 
@@ -19,20 +19,21 @@ So the demo path breaks exactly where it should get interesting: the operator ac
 
 ## Overview and Success Measures
 
-- **Primary outcome:** accepting the RFQ action in the Inbox produces a CRM case *and* a started agent run over the e-mail's PDF, with no manual step in between.
-- **Leading indicators:** `rfq_intake.rfq.created` observed after an accepted action; a workflow instance for `property_documents.pdf_intake` bound to the quote.
-- **Baseline:** zero — the link does not exist; the agent is started by hand.
-- **Market / product reference:** the "inbox → structured record → automated enrichment → human approval" loop is the shape every AI-assisted CRM intake converges on. What they get right and we adopt: the human reviews *before* the record is written, not after. What they carry and we skip: a bespoke RFQ object. Our RFQ is the CRM case the platform already models, and the offer document is produced at the end rather than reserved at the start.
+- **Primary outcome:** accepting the RFQ action in the Inbox produces a CRM case and a complete, correlated analysis of its PDF, with no manual handoff.
+- **Leading indicators:** a successful `property_documents.pdf_intake` run, one `property_documents.room_measurements` run per rendered PDF page, and one parallel-workflow fork/join event pair bound to the RFQ.
+- **Baseline:** zero — the link does not exist; agents are started by hand.
+- **Market / product reference:** [Camunda's parallel-gateway documentation](https://docs.camunda.io/docs/components/modeler/bpmn/parallel-gateways) uses static concurrent branches and a wait-all join. We adopt that shape with the installed workflow engine: catalog matching and page measurements become two static branches; page cardinality remains app-owned fan-out because it is only known after PDF rendering.
 
 ## Goals
 
 - **REQ-001** — Accepting the RFQ action in the AI Action Inbox saves the request as a `CustomerDeal` in `customers`, scoped to the acting user's tenant and organization and owned by the guaranteed contact.
 - **REQ-005** — Accepting the action guarantees the sender exists as a CRM contact: created when absent, enriched in empty fields only when present, together with the company record when the thread names one. The RFQ is linked to that contact.
-- **REQ-002** — The same acceptance starts, post-commit and without blocking or failing the action, a workflow that runs `property_documents.pdf_intake` over the e-mail's PDF, then `property_documents.room_dimensions` over **every** extracted floor plan, then `property_documents.catalog_matcher` over **every** requirement in the brief. Coverage is complete: a service the matcher never saw cannot reach the quote.
+- **REQ-002** — The same acceptance starts, post-commit and without blocking or failing the action, a workflow that runs `property_documents.pdf_intake` over the e-mail PDF, then in parallel: grouped `property_documents.catalog_matcher` over its extracted brief and one `property_documents.room_measurements` run for every rendered PNG page. Every rendered page is attempted exactly once per workflow invocation; JSON manifests are validated as control data and are never staged as images.
 - **REQ-003** — The Inbox makes it legible that this action starts an agentic analysis of the brief and floor plans, not merely a quote creation.
 - **REQ-006** — The Workflows list shows our process and nothing else: the three code workflows shipped by installed modules are not registered in this app.
 - **REQ-004** — The trigger chain is defined in code and regenerated by `yarn generate`; no UI click and no seeded row is required to reproduce it.
 - **REQ-007** — The RFQ funnel and its stages are defined in code, and the process moves the case through it by itself: the case opens in `Nowe zgłoszenie`, the chain moves it to `Wycena w toku` before the first agent and to `Do sprawdzenia` after the last one. The closing stages carry the labels the installed closure detection recognises.
+- **REQ-008** — The two branches begin only after PDF intake succeeds, execute concurrently through a `PARALLEL_FORK`/`PARALLEL_JOIN`, and preserve tenant, organization, actor, workflow instance, source run, and page-artifact correlation for each measurement run.
 
 ## Non-goals
 
@@ -49,7 +50,7 @@ One new app module, `src/modules/rfq_intake`, contributing four small things and
 1. An **inbox action definition** that overrides `create_quote`, delegating execution to the core `sales` definition and adding RFQ-specific extraction rules.
 2. An **i18n label change** so the action reads as what it does.
 3. A **post-commit subscriber** on `inbox_ops.action.executed` that resolves the source e-mail's attachments and emits the app's own `rfq_intake.rfq.created`.
-4. A **code-defined workflow** whose embedded event trigger listens for that event and runs the agent chain, with the per-plan and per-requirement loops in two app-owned commands.
+4. A **code-defined workflow** that invokes `pdf_intake`, then uses a static `PARALLEL_FORK`/`PARALLEL_JOIN`: catalog matching receives the validated brief while `rfq_intake.measure-rooms` discovers every validated rendered page, promotes each artifact to the RFQ deal, and starts one `room_measurements` run per page concurrently.
 
 The app's own event exists because `inbox_ops.action.executed` carries no attachments, and a workflow trigger's `contextMapping` can only read the event payload. Emitting our own event is therefore not a workaround but the join point: it is also the stable seam the later pricing and offer steps will hang off.
 
@@ -69,6 +70,8 @@ The app's own event exists because `inbox_ops.action.executed` carries no attach
 | Those looped calls still produce real, correlated runs | `agentRuntime.run` persists an `AgentRun` through `agent_orchestrator.runs.create` (`lib/runtime/persistence.ts:180`), and `AgentRunCtx` takes the workflow instance, step and invocation ids (`persistence.ts:22-47`), so the loop is traced exactly like an `INVOKE_AGENT` step | Make every call an `INVOKE_AGENT` node | Impossible without dynamic fan-out. What a loop forgoes is the disposition path, and both looped agents are read-only `research` agents that raise no proposal |
 | Bridge artifacts to attachments with `agent_orchestrator.artifact.promote` | `room_dimensions` wants an `attachmentId`; `pdf_intake` emits plan PNGs as run artifacts. The installed command already does exactly this, idempotently (`commands/artifacts.ts:112`) | Re-render the plan ourselves, or pass a storage key | Would duplicate a writer the platform already owns |
 | Start the agent post-commit | `AGENTS.md`: effects stay post-commit; an agent failure must not fail the accepted action | Call `agent_orchestrator.runs.create` inside the action's `execute` | Couples a long-running external call to the action transaction |
+| Keep `room_measurements` one-image-only and fan out inside `rfq_intake.measure-rooms` | The strict V2 tool validates one staged PNG, JPEG, or WebP and rejects any non-image or multi-file staging. `pdf_intake` emits control manifests plus page PNGs, so the command validates `pdf-pages.json`, selects only the declared PNG artifacts, promotes each to the existing RFQ deal, and starts every page run with a stable page-artifact invocation ID | Stage all PDF artifacts in one `room_measurements` run | Rejected by product decision Q-001: it would widen the V2 public agent/tool/output contract and stage JSON as image input |
+| Fork catalog matching and page measurements after PDF intake, then wait for both | `PARALLEL_FORK` has static concurrent branch tokens and `PARALLEL_JOIN` has wait-all semantics in the installed workflow engine. The independent branches share only the completed scoped PDF run | Run page measurements after catalog matching | Needlessly serializes independent work and does not meet REQ-008 |
 
 ## Domain Vocabulary and Business Rules
 
@@ -80,8 +83,9 @@ The app's own event exists because `inbox_ops.action.executed` carries no attach
 | RFQ analysis start | Exactly one agent run per accepted `create_quote` action that has at least one attachment | `rfq_intake.rfq.created` emission | No attachments → no event, logged; the quote still exists |
 | Contact guarantee | After a successful action there is exactly one CRM person for the sender's e-mail, plus a company when the thread named one and the person is linked to it | `customers` (`customer_entities`) | Contact resolution or creation failing fails the action before the quote is created |
 | Registered workflows | Exactly one code workflow reaches the registry in this app: `rfq_intake.analysis` | `src/bootstrap-common.ts` | A denied id that no longer exists upstream is ignored, not an error |
-| Analysed plan | Every entry of `floor-plans.json`, each promoted to an attachment on the deal and read by its own `room_dimensions` run | `floor-plans.json` produced by `pdf_intake` | Empty manifest → the step is a no-op, recorded on the run; one plan failing does not abandon the rest |
-| Matcher input | One `catalog_matcher` run per entry of `brief.json`'s `requirements[]` — one requirement per call, which is what the agent's own contract expects | `brief.json` | Empty requirements → the step is a no-op; an unmatched requirement is reported, never silently dropped |
+| Rendered page | An entry in the `pdf-pages.json` manifest and its same-name `image/png` artifact captured by the successful, scoped `pdf_intake` run | `pdf-pages.json` + `agent_orchestrator.agent_run_artifacts` | Missing, duplicate, foreign, non-PNG, or invalid-metadata artifacts fail the measurement branch before any agent is started |
+| Measurement fan-out | One concurrent `property_documents.room_measurements` run per rendered page; each input has exactly one attachment, promoted from the page artifact onto the RFQ deal and aliased to its manifest filename | `rfq_intake.measure-rooms` | An individual run failure is returned in the branch result after all other pages settle; a malformed intake artifact fails the branch |
+| Matcher input | One grouped `catalog_matcher` run over the validated `brief.json` raw text | `brief.json` | Missing or invalid brief fails only the catalog branch |
 | Attachment set | `InboxEmail.attachment_ids` of the e-mail behind the action's proposal | `inbox_ops.inbox_emails` | Empty or unresolvable → treated as "no attachments" |
 
 ## Users, Permissions, and Scope
@@ -107,6 +111,8 @@ Scope is not derived by this module. `tenantId` / `organizationId` arrive on the
 | RFQ event | App-own | `rfq_intake` → `events.ts` | Event bus | Join point the trigger and later steps read |
 | Agent invocation | Reuse | `workflows` + `agent_orchestrator` | Code workflow, `INVOKE_AGENT` activity | First-class core activity, not a custom runner |
 | Agent | Reuse | `property_documents` | Agent id `property_documents.pdf_intake` | Already shipped in `main` (PR #13) |
+| Page measurement | Reuse | `property_documents` | Agent id `property_documents.room_measurements` | V2 schema and strict single-image tool stay unchanged; RFQ only supplies one promoted page attachment per run |
+| Branch coordination | Reuse | `workflows` | `PARALLEL_FORK` + `PARALLEL_JOIN` | Static branches give durable wait-all coordination; dynamic page cardinality stays inside a scoped command |
 
 No app-owned entity, no migration.
 
@@ -125,10 +131,13 @@ e-mail (PDF)
   -> workflows event-trigger (wildcard subscriber, code triggers included)
       -> workflow `rfq_intake.analysis`:
            START
-           -> INVOKE_AGENT  property_documents.pdf_intake   -> brief.json, floor-plans.json, N plan PNGs
-           -> AUTOMATED     rfq_intake.plans.analyze        -> for EACH plan: artifact.promote -> agentRuntime.run(room_dimensions)
-           -> AUTOMATED     rfq_intake.requirements.match   -> for EACH requirement: agentRuntime.run(catalog_matcher)
-           END
+           -> INVOKE_AGENT  property_documents.pdf_intake -> brief.json, pdf-pages.json, N page PNGs
+           -> PARALLEL_FORK
+              -> AUTOMATED rfq_intake.requirements.match -> grouped catalog matcher
+              -> AUTOMATED rfq_intake.measure-rooms -> validate manifest; for EACH PNG:
+                   artifact.promote to CustomerDeal -> agentRuntime.run(room_measurements, one attachment)
+           -> PARALLEL_JOIN (wait all)
+           -> END
 ```
 
 - **Module boundaries:** `rfq_intake` owns no data, only the join. It stays a separate module from `property_documents` because the agent must remain usable without the inbox, and from any future pricing module because that one will own records.
@@ -181,11 +190,10 @@ Event payload (shaped for the agent so `contextMapping` stays 1:1):
 The prefix `rfq_intake.` is not in the event-trigger subscriber's excluded list (`query_index.`, `search.`, `workflows.`, `cache.`, `queue.`).
 
 ## Security, Privacy, and Compliance
-
 - **Authorization:** the enforced gate stays the installed `sales.quotes.manage`; `customers.deals.manage` is required by the command the action calls. The subscriber runs behind an already-authorized execution and grants nothing.
-- **Tenant isolation:** every lookup in the subscriber is filtered by the event's `tenantId` and `organizationId`; absent scope aborts the handler instead of querying unscoped.
-- **Sensitive data:** the RFQ PDF is customer content. It is not copied into the event — only `attachmentId` references travel — and it stays under the installed attachments module's storage and access rules. The agent's own prompt already treats document content as untrusted data and is forbidden from writing business records.
-- **Abuse and failure modes:** a malicious PDF cannot reach a business record through this path, because the agent's only durable output is its artifact set. A redelivered event can start a duplicate run; it cannot create a duplicate quote, since quote creation happens in the installed action path, not here.
+- **Tenant isolation:** every lookup in the subscriber and both branch commands is filtered by trusted `tenantId` and `organizationId`; absent or mismatched scope aborts instead of widening.
+- **Sensitive data:** the RFQ PDF and rendered pages are customer content. Only scoped IDs travel through workflow input. `rfq_intake.measure-rooms` promotes a page exactly through `agent_orchestrator.artifact.promote`, scoped to the same RFQ deal; it never passes a storage key or raw bytes to the agent. The agent prompt treats each page as untrusted and cannot write a business record.
+- **Abuse and failure modes:** control JSON is never staged into the image-only agent. The command validates the manifest, filename, MIME type, artifact metadata, scope, source run and page attachment before agent handoff. A redelivered event can start a duplicate workflow, but each page invocation ID is stable for its source artifact and workflow instance; it cannot create a second page attachment through the promotion command.
 
 ## Integration Coverage
 
@@ -205,7 +213,9 @@ The prefix `rfq_intake.` is not in the event-trigger subscriber's excluded list 
 | TEST-013 | unit | Empty organization; then an organization carrying the `Default Pipeline` customers seeds | Run `ensureRfqPipeline` | Six stages in order, ours is the default, the seeded one is demoted; a second run changes nothing; a renamed stage keeps its wording and a deleted one is recreated at its position | REQ-007 |
 | TEST-014 | unit | Seeded funnel; then an unseeded organization | Execute `rfq_intake.deal.advance` | The stage resolves by position and `customers.deals.update` is called with it; unseeded is reported as `moved: false` with no deal write; an unknown stage key is rejected | REQ-007 |
 | TEST-015 | unit | The generated workflow registry | Read `rfq_intake.analysis` | The activity chain is `advance(quoting)` → `pdf_intake` → plans → requirements → `advance(review)` | REQ-007 |
-| TEST-005 | manual (demo) | Enterprise + agents flags on, seeded org, RFQ e-mail with PDF | Accept the action in the Inbox | The deal exists in the pipeline; an agent run for `property_documents.pdf_intake` starts and produces `brief.json` + `floor-plans.json` | REQ-001, REQ-002 |
+| TEST-005 | manual (demo) | Enterprise + agents flags on, seeded org, RFQ e-mail with PDF | Accept the action in the Inbox | The deal exists in the pipeline; `property_documents.pdf_intake` produces `brief.json`, `pdf-pages.json`, and one `room_measurements` run per rendered page | REQ-001, REQ-002, REQ-008 |
+| TEST-016 | unit | Successful scoped PDF run with `pdf-pages.json` listing three PNGs and matching artifacts | Execute `rfq_intake.measure-rooms` with deferred agent results | All three artifacts are promoted to the RFQ deal and all three single-attachment `room_measurements` runs start before any resolves; manifests/foreign/non-PNG artifacts are rejected before runtime handoff; one failed run does not suppress the others | REQ-002, REQ-008 |
+| TEST-017 | unit | Generated `rfq_intake.analysis` definition | Validate with `workflowDefinitionDataSchema` | Exactly one post-intake `PARALLEL_FORK` has catalog and page-measurement branches converging at its paired `PARALLEL_JOIN`; no branch starts before PDF intake | REQ-008 |
 
 TEST-005 is deliberately manual for this slice: an automated end-to-end run would need the OpenCode agent runtime in CI, which is its own piece of work. `HACK(hackathon)` noted at the seam.
 
@@ -214,12 +224,12 @@ TEST-005 is deliberately manual for this slice: an automated end-to-end run woul
 ### Phase 1 — RFQ is saved and the analysis starts
 
 - **Depends on:** `property_documents.pdf_intake`, already merged to `main`; `OM_ENABLE_ENTERPRISE_MODULES=true` and `OM_ENABLE_ENTERPRISE_MODULES_AGENTS=true` locally.
-- **Outcome:** accepting the inbox action opens the CRM case, guarantees the contact, and runs the three-agent chain over its PDF.
+- **Outcome:** accepting the inbox action opens the CRM case, guarantees the contact, invokes PDF intake, then runs catalog matching and one strict room-measurement extraction per rendered page in parallel.
 - **Deliverables:** `src/modules/rfq_intake/{index.ts,inbox-actions.ts,events.ts,setup.ts,cli.ts,workflows.ts,subscribers/start-rfq-analysis.ts,commands/analysis.ts,commands/pipeline.ts,lib/ensureContact.ts,lib/pipeline.ts,lib/commandBus.ts}`; `rfq_intake` added to `src/modules.ts` **after** `sales`; i18n label change in `src/i18n/pl.json` and its English counterpart; the denylist filter in `src/bootstrap-common.ts`.
-- **Requirements closed:** REQ-001 … REQ-007
-- **Tests:** TEST-001 … TEST-004 and TEST-006 … TEST-015 automated, TEST-005 manual
+- **Requirements closed:** REQ-001 … REQ-008
+- **Tests:** TEST-001 … TEST-004 and TEST-006 … TEST-017 automated, TEST-005 manual
 - **Validation:** `yarn generate && yarn typecheck && yarn lint && yarn test`
-- **Exit gate:** the generated registries show our `create_quote` definition and the `rfq_intake.analysis` workflow with its trigger; a manual run of TEST-005 produces both manifests.
+- **Exit gate:** the generated workflow definition validates with a post-intake fork/join; TEST-016 proves every rendered page reaches a one-file measurement run; a manual run of TEST-005 produces manifests and page measurement runs.
 
 **Steps** (each leaves the app working):
 
@@ -233,6 +243,8 @@ TEST-005 is deliberately manual for this slice: an automated end-to-end run woul
 8. Filter `registerCodeWorkflows` in `src/bootstrap-common.ts` against a named denylist — `workflows.simple-approval`, `workflows.checkout-demo`, `sales.order-approval` — with a comment stating that the first two are shipped demos and the third is a deliberate product removal. TEST-010.
 9. Define the funnel in `lib/pipeline.ts` (six stages, addressed by position), seed it from `setup.ts` at `mercato init` and from `mercato rfq_intake seed-pipeline` for organizations that already exist, and add `rfq_intake.deal.advance` plus the two stage steps that bracket the chain. TEST-013 … TEST-015.
 10. Run TEST-005 by hand end to end; record what actually happened, including anything stubbed.
+11. Extend `commands/analysis.ts` with `rfq_intake.measure-rooms`. It loads only the successful PDF intake run in the workflow's trusted scope, verifies `pdf-pages.json` and every listed `AgentRunArtifact`, promotes every rendered PNG to `customers:customer_deal/${dealId}`, then starts `room_measurements` with exactly `{ __files: { attachments: [{ attachmentId, as: pageFileName }] } }` and a stable per-artifact invocation ID. Use `Promise.allSettled` so every valid page is attempted concurrently and report per-page failures without skipping sibling pages. TEST-016.
+12. Replace the direct intake-to-matcher transition with `PARALLEL_FORK` → `match_catalog` and `measure_rooms` → paired `PARALLEL_JOIN` → end. Register the measurement command workflow-safe and retain strict interpolation. TEST-017.
 
 ### Phase 2 — From analysis to a priced offer (out of scope here)
 
@@ -253,6 +265,7 @@ Named only so Phase 1 is not mistaken for the whole process:
 | REQ-006 | Workflows list | `src/bootstrap-common.ts` denylist | Phase 1 | TEST-010 | AC-008 |
 | REQ-004 | — | `registry.workflows`, `registry.inbox-actions` | Phase 1 | TEST-004 | AC-005 |
 | REQ-007 | Deals kanban | `customer_pipelines`, `customer_pipeline_stages` via `setup.seedDefaults` / `mercato rfq_intake seed-pipeline`; `rfq_intake.deal.advance` | Phase 1 | TEST-013 … TEST-015, TEST-005 | AC-009 |
+| REQ-008 | J-001 analysis completion | `pdf_intake` run → `pdf-pages.json`/artifacts → `rfq_intake.measure-rooms`; fork/join workflow graph | Phase 1 | TEST-016, TEST-017 | AC-010 |
 
 ## Rollout, Migration, and Rollback
 
@@ -274,6 +287,8 @@ Prerequisite for the demo environment, not for the code: the enterprise and agen
 | The looping commands are not `defaultEnabled` as workflow-safe commands | The chain stops after `pdf_intake` on a tenant that never opened the workflow-command settings | Part of TEST-005's manual checklist | Accepted — grandfathering a new command is explicitly discouraged upstream |
 | Event redelivery starts duplicate agent runs | Wasted tokens, duplicate artifacts | Trigger `maxConcurrentInstances`; runs are visible and cancellable | Accepted for the hackathon |
 | Agent runtime absent or failing | No analysis; the deal still exists | The operator sees the run fail; nothing is faked green | Accepted |
+| A malformed manifest or foreign/non-PNG page artifact reaches the image agent | A scope or type boundary is crossed | Validate output manifest, captured artifact identity/MIME/metadata, scope and source run before promotion or runtime handoff; TEST-016 | Fails only the measurement branch before an unsafe handoff |
+| One slow or failed page hides remaining pages | Partial document coverage | Start all validated pages concurrently with `Promise.allSettled`, preserving each correlated run/error; TEST-016 | The workflow branch records partial measurement failures and can be retried as a unit |
 
 ## Acceptance Criteria
 
@@ -286,27 +301,32 @@ Prerequisite for the demo environment, not for the code: the enterprise and agen
 - [ ] **AC-008** — The Workflows list in a fresh environment shows `rfq_intake.analysis` and no installed demo workflow.
 - [ ] **AC-005** — `yarn generate` alone reproduces the whole chain; no UI step is required. The one piece of data it cannot conjure is the funnel itself, which `mercato init` or `mercato rfq_intake seed-pipeline` writes from the same code-defined list.
 - [ ] **AC-009** — On the deals kanban the case appears in `Nowe zgłoszenie` when the action is accepted, is in `Wycena w toku` while the agents run, and ends in `Do sprawdzenia` with the stage history showing all three moves.
+- [ ] **AC-010** — After a successful PDF intake, the workflow forks into catalog matching and page measurement branches; each `pdf-pages.json` PNG produces exactly one same-scoped, one-image `property_documents.room_measurements` run before the paired join completes.
 - [ ] Validation gate green: `yarn generate && yarn typecheck && yarn lint && yarn test`.
 
 ## Final Compliance Report
 
 | Check | Status | Evidence / resolution |
 |---|---|---|
-| Applicable `AGENTS.md` files and routed guides reviewed | pass | Routes: `umes` (inbox action override), `module-data` (app module), `ai-workflow` (workflow + agent) |
-| Data models, APIs, events, UI, and tests internally consistent | pass | Traceability table; no entity or route is introduced |
-| Every workflow completes end to end without a catch-all phase | pass | Phase 1 is one vertical slice; Phase 2 is explicitly out of scope |
-| Platform-native reuse and extension points chosen before custom code | pass | Reuse map: registries, event bus, code workflow, installed `sales` execute |
-| UI contracts identify references, components, theme/state coverage | n/a | No authored surface; only a translation change |
-| Every phase has dependencies, bounded slices, tests, value, exit gate | pass | Phase 1 steps 1–6 |
+| Applicable `AGENTS.md` files and routed guides/skills reviewed | pass | Routes: `umes` (inbox action override), `module-data` (app module), `ai-workflow` (workflow + agent); Camunda parallel-gateway documentation reviewed |
+| Data models, APIs, events, UI, and tests internally consistent | pass | Traceability includes REQ-008 / TEST-016 / TEST-017; no entity or route is introduced |
+| Every workflow completes end to end without a catch-all phase | pass | The paired fork/join is part of Phase 1's complete vertical slice |
+| Platform-native reuse and extension points chosen before custom code | pass | Reuse map: artifact promotion, agent runtime, code workflow, installed fork/join |
+| UI contracts identify references, components, and state coverage | n/a | No authored surface; only a translation change |
+| Every phase has dependencies, bounded slices, tests, value, and exit gate | pass | Phase 1 steps 1–12 |
 
 Verdict: `Ready for implementation`.
 
 ## Open Questions
 
-None blocking. The `process_instances` projection question is tracked as a risk with a plan B, not as a gate.
+| ID | Question | Owner | Blocking? | Resolution / decision date |
+|---|---|---|---|---|
+| Q-001 | `pdf_intake` emits `brief.json`, `pdf-pages.json`, and one PNG per page, while `room_measurements` accepts exactly one staged image. Should RFQ fan out to one parallel `room_measurements` run per PNG (recommended), or should its public one-image contract be changed to accept all generated files in one run? | Product owner | yes | **Resolved 2026-10-11:** fan out to one run per PNG; preserve the strict V2 contract |
 
 ## Changelog
 
 | Date | Change |
 |---|---|
 | 2026-09-19 | Initial draft |
+| 2026-10-11 | Added blocking design question for the parallel room-measurements RFQ stage. |
+| 2026-10-11 | Chose per-PNG room-measurement fan-out and specified the post-intake parallel fork/join. |
