@@ -155,31 +155,15 @@ describe('rfq_intake analysis workflow', () => {
 
     expect(definition.interpolation).toBe('strict')
     expect(definition.steps.map((step) => step.stepId)).toEqual([
-      'start',
-      'mark_quoting',
-      'extract_pdf',
-      'measure_rooms',
-      'match_catalog',
-      'mark_review',
-      'end',
+      'start', 'mark_quoting', 'extract_pdf', 'measure_rooms', 'match_catalog', 'draft_quote', 'mark_review', 'end',
     ])
     expect(definition.steps.map((step) => step.stepType)).toEqual([
-      'START',
-      'AUTOMATED',
-      'AUTOMATED',
-      'AUTOMATED',
-      'AUTOMATED',
-      'AUTOMATED',
-      'END',
+      'START', 'AUTOMATED', 'AUTOMATED', 'AUTOMATED', 'AUTOMATED', 'AUTOMATED', 'AUTOMATED', 'END',
     ])
 
     const activities = definition.steps.flatMap((step) => step.activities ?? [])
     expect(activities.map((activity) => activity.activityType)).toEqual([
-      'UPDATE_ENTITY',
-      'INVOKE_AGENT',
-      'UPDATE_ENTITY',
-      'UPDATE_ENTITY',
-      'UPDATE_ENTITY',
+      'UPDATE_ENTITY', 'INVOKE_AGENT', 'UPDATE_ENTITY', 'UPDATE_ENTITY', 'INVOKE_AGENT', 'UPDATE_ENTITY',
     ])
     expect(activities.every((activity) => activity.async !== true)).toBe(true)
     // The funnel move runs FIRST and on `{{context.dealId}}`: an operator has to see a
@@ -223,9 +207,16 @@ describe('rfq_intake analysis workflow', () => {
         },
       },
     })
+    expect(activities[4]).toMatchObject({
+      config: {
+        agentId: 'rfq_intake.quote_drafter',
+        input: { dealId: '{{context.dealId}}', workflowInstanceId: '{{workflow.instanceId}}' },
+        onResult: { autoApproveThreshold: 0 },
+      },
+    })
     // The closing move, to `Do sprawdzenia`. Both funnel activities go through the same
     // command with a different `stage`, so the pair is asserted together.
-    expect(activities[4]!.config).toEqual({
+    expect(activities[5]!.config).toEqual({
       commandId: 'rfq_intake.deal.advance',
       input: {
         tenantId: '{{workflow.tenantId}}',
@@ -240,7 +231,8 @@ describe('rfq_intake analysis workflow', () => {
       { transitionId: 't_extract', transitionName: 'Extract', fromStepId: 'mark_quoting', toStepId: 'extract_pdf', trigger: 'auto' },
       { transitionId: 't_measure', transitionName: 'Measure', fromStepId: 'extract_pdf', toStepId: 'measure_rooms', trigger: 'auto' },
       { transitionId: 't_match', transitionName: 'Match', fromStepId: 'measure_rooms', toStepId: 'match_catalog', trigger: 'auto' },
-      { transitionId: 't_review', transitionName: 'Review', fromStepId: 'match_catalog', toStepId: 'mark_review', trigger: 'auto' },
+      { transitionId: 't_quote', transitionName: 'Draft quote', fromStepId: 'match_catalog', toStepId: 'draft_quote', trigger: 'auto' },
+      { transitionId: 't_review', transitionName: 'Review', fromStepId: 'draft_quote', toStepId: 'mark_review', trigger: 'auto' },
       { transitionId: 't_done', transitionName: 'Done', fromStepId: 'mark_review', toStepId: 'end', trigger: 'auto' },
     ])
     expect(definition.triggers ?? []).toEqual([])
@@ -253,6 +245,7 @@ describe('rfq_intake analysis workflow', () => {
 
     expect(workflowDefinitionDataSchema.safeParse(workflow.definition).success).toBe(true)
   })
+
 })
 
 
