@@ -271,8 +271,8 @@ describe('room measurements vision service', () => {
     expect(result.drawing).toMatchObject(IMAGE)
     expect(mockGenerateObject).toHaveBeenCalledTimes(1)
     const [call] = generationCalls()
-    expect(call.output).toBe('no-schema')
-    expect(call.schema).toBeUndefined()
+    expect(call.output).toBeUndefined()
+    expect(call.schema).toBe(roomMeasurementCandidateSchema)
     expect(call.messages[0].content).toEqual(
       expect.arrayContaining([{ type: 'image', image: DATA_URL }]),
     )
@@ -306,8 +306,8 @@ describe('room measurements vision service', () => {
     expect(mockGenerateObject).toHaveBeenCalledTimes(2)
     const [first, second] = generationCalls()
     for (const call of [first, second]) {
-      expect(call.output).toBe('no-schema')
-      expect(call.schema).toBeUndefined()
+      expect(call.output).toBeUndefined()
+      expect(call.schema).toBe(roomMeasurementCandidateSchema)
       expect(call.messages[0].content).toEqual(
         expect.arrayContaining([{ type: 'image', image: DATA_URL }]),
       )
