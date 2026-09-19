@@ -26,10 +26,6 @@ registerWorkflowSafeCommands([
     requiredFeatures: ['customers.deals.manage'],
     labelKey: 'rfq_intake.workflows.commands.measure-rooms',
   },
-  {
-    commandId: 'rfq_intake.analyze-document',
-    requiredFeatures: ['customers.deals.manage'],
-  },
 ])
 
 /**
@@ -84,26 +80,45 @@ const rfqAnalysis = defineWorkflow({
       ],
     },
     {
-      stepId: 'analyze_document',
-      stepName: 'Analyze extracted document',
+      stepId: 'match_catalog',
+      stepName: 'Match the brief to the catalog',
       stepType: 'AUTOMATED',
-      // HACK(hackathon): INVOKE_AGENT → PARALLEL_FORK stalls in the installed
-      // runtime after the intake signal. The app command runs both independent
-      // branches concurrently until the framework continuation is repaired.
-      description: 'Runs catalog matching and page measurements concurrently.',
+      description: 'Runs grouped catalog matching over the extracted brief.',
       activities: [
         {
-          activityId: 'analyze_document_concurrently',
-          activityName: 'Analyze document concurrently',
+          activityId: 'match_requirements',
+          activityName: 'Match requirements',
           activityType: 'UPDATE_ENTITY',
           config: {
-            commandId: 'rfq_intake.analyze-document',
+            commandId: 'rfq_intake.requirements.match',
+            input: {
+              tenantId: '{{workflow.tenantId}}',
+              organizationId: '{{workflow.organizationId}}',
+              workflowInstanceId: '{{workflow.instanceId}}',
+              stepId: 'match_catalog',
+            },
+          },
+        },
+      ],
+    },
+    {
+      stepId: 'measure_rooms',
+      stepName: 'Measure rendered PDF pages',
+      stepType: 'AUTOMATED',
+      description: 'Runs strict room measurement extraction for every rendered PDF page.',
+      activities: [
+        {
+          activityId: 'measure_rendered_pages',
+          activityName: 'Measure rendered pages',
+          activityType: 'UPDATE_ENTITY',
+          config: {
+            commandId: 'rfq_intake.measure-rooms',
             input: {
               tenantId: '{{workflow.tenantId}}',
               organizationId: '{{workflow.organizationId}}',
               workflowInstanceId: '{{workflow.instanceId}}',
               dealId: '{{context.dealId}}',
-              stepId: 'analyze_document',
+              stepId: 'measure_rooms',
             },
           },
         },
@@ -113,8 +128,9 @@ const rfqAnalysis = defineWorkflow({
   ],
   transitions: [
     { transitionId: 't_start', transitionName: 'Start', fromStepId: 'start', toStepId: 'extract_pdf', trigger: 'auto' },
-    { transitionId: 't_analyze', transitionName: 'Analyze', fromStepId: 'extract_pdf', toStepId: 'analyze_document', trigger: 'auto' },
-    { transitionId: 't_done', transitionName: 'Done', fromStepId: 'analyze_document', toStepId: 'end', trigger: 'auto' },
+    { transitionId: 't_match', transitionName: 'Match', fromStepId: 'extract_pdf', toStepId: 'match_catalog', trigger: 'auto' },
+    { transitionId: 't_measure', transitionName: 'Measure', fromStepId: 'match_catalog', toStepId: 'measure_rooms', trigger: 'auto' },
+    { transitionId: 't_done', transitionName: 'Done', fromStepId: 'measure_rooms', toStepId: 'end', trigger: 'auto' },
   ],
 })
 

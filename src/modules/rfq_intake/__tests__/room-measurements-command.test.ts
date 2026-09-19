@@ -24,7 +24,7 @@ jest.mock('@open-mercato/enterprise/modules/agent_orchestrator/lib/runtime/artif
 }))
 jest.mock('@open-mercato/shared/lib/commands', () => ({ registerCommand: jest.fn() }))
 
-import { analyzeDocumentCommand, measureRoomsCommand } from '../commands/analysis'
+import { measureRoomsCommand } from '../commands/analysis'
 
 const INPUT = {
   tenantId: '11111111-1111-4111-8111-111111111111',
@@ -282,52 +282,3 @@ describe('measureRoomsCommand', () => {
   })
 })
 
-describe('analyzeDocumentCommand', () => {
-  it('starts catalog matching and page measurements before either command resolves', async () => {
-    const catalog = deferred()
-    const measurements = deferred()
-    const started: string[] = []
-    const ctx = {
-      container: {
-        resolve: (name: string) => {
-          if (name !== 'commandBus') throw new Error(`unexpected resolve ${name}`)
-          return {
-            execute: <TInput, TResult>(commandId: string, _options: { input: TInput }) => {
-              started.push(commandId)
-              const wait =
-                commandId === 'rfq_intake.requirements.match'
-                  ? catalog.promise
-                  : commandId === 'rfq_intake.measure-rooms'
-                    ? measurements.promise
-                    : Promise.reject(new Error(`unexpected command ${commandId}`))
-              return wait.then((result) => ({ result } as unknown as { result: TResult }))
-            },
-          }
-        },
-      },
-    } as never
-    const pending = analyzeDocumentCommand.execute(
-      {
-        tenantId: INPUT.tenantId,
-        organizationId: INPUT.organizationId,
-        workflowInstanceId: INPUT.workflowInstanceId,
-        dealId: INPUT.dealId,
-        stepId: 'analyze_document',
-      },
-      ctx,
-    )
-    const tick = Promise.withResolvers<void>()
-    setImmediate(tick.resolve)
-    await tick.promise
-
-    expect(started).toEqual(['rfq_intake.requirements.match', 'rfq_intake.measure-rooms'])
-
-    catalog.resolve({ needs: [] })
-    measurements.resolve({ intakeRunId: RUN_ID, totalPages: 1, succeeded: 1, failed: [] })
-
-    await expect(pending).resolves.toEqual({
-      catalog: { needs: [] },
-      measurements: { intakeRunId: RUN_ID, totalPages: 1, succeeded: 1, failed: [] },
-    })
-  })
-})
