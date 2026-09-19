@@ -4,10 +4,17 @@ import { fileURLToPath } from 'node:url'
 
 const currentFile = fileURLToPath(import.meta.url)
 
-const PROPERTY_PDF_AGENT_FILES = [
-  'property_documents_pdf_intake.md',
-  'property_documents_pdf_text_reader.md',
+const PROPERTY_DOCUMENT_AGENT_FILES = [
+  { fileName: 'property_documents_pdf_intake.md', readableSubdir: 'analysis' },
+  { fileName: 'property_documents_pdf_text_reader.md', readableSubdir: 'analysis' },
+  { fileName: 'property_documents_room_dimensions.md', readableSubdir: 'in' },
 ]
+const ROOM_DIMENSIONS_AGENT_FILE = 'property_documents_room_dimensions.md'
+const ROOM_DATA_OBJECT_MARKER = 'the `data` object'
+const ROOM_JSON_OBJECT_MARKER =
+  'Pass it as the `outcome` argument of the submit_outcome tool, as a JSON object (not a string):'
+const ROOM_RESEARCH_ENVELOPE_GUIDANCE =
+  'Pass a complete `{ "kind": "research", "data": [...] }` envelope as the `outcome` argument of the submit_outcome tool; the schema below describes its `data` array:'
 
 const PDF_INTAKE_AGENT_FILE = 'property_documents_pdf_intake.md'
 const OUTCOME_CONTRACT_MARKER = '## Outcome contract\n'
@@ -58,7 +65,25 @@ function hardenPdfIntakeOutcomeContract(source, agentPath) {
   return `${source.slice(0, outcomeStart)}${hardenedContract}${source.slice(proseStart)}`
 }
 
-function hardenGeneratedAgentFile(cwd, fileName) {
+function hardenRoomDimensionsOutcomeContract(source, agentPath) {
+  if (
+    source.includes('the `data` array') &&
+    source.includes(ROOM_RESEARCH_ENVELOPE_GUIDANCE)
+  ) {
+    return source
+  }
+  if (
+    !source.includes(ROOM_DATA_OBJECT_MARKER) ||
+    !source.includes(ROOM_JSON_OBJECT_MARKER)
+  ) {
+    throw new Error(`Cannot find the generated room-array outcome guidance in ${agentPath}`)
+  }
+  return source
+    .replace(ROOM_DATA_OBJECT_MARKER, 'the `data` array')
+    .replace(ROOM_JSON_OBJECT_MARKER, ROOM_RESEARCH_ENVELOPE_GUIDANCE)
+}
+
+function hardenGeneratedAgentFile(cwd, fileName, readableSubdir) {
   const agentPath = path.resolve(cwd, 'docker/opencode/agents', fileName)
   const workspaceRoot = (
     process.env.OM_OPENCODE_WORKSPACE_ROOT_CONTAINER || '/home/opencode/work'
@@ -66,10 +91,10 @@ function hardenGeneratedAgentFile(cwd, fileName) {
   const relativeWorkspaceRoot = path.posix.relative('/home/opencode', workspaceRoot)
   const workspaceRelativeGlob =
     relativeWorkspaceRoot && !relativeWorkspaceRoot.startsWith('../')
-      ? `${relativeWorkspaceRoot}/*/analysis/**`
+      ? `${relativeWorkspaceRoot}/*/${readableSubdir}/**`
       : null
-  const workspaceGlob = `${workspaceRoot}/*/analysis/**`
-  const workspaceContainerGlob = `${workspaceRoot.replace(/^\/+/, '')}/*/analysis/**`
+  const workspaceGlob = `${workspaceRoot}/*/${readableSubdir}/**`
+  const workspaceContainerGlob = `${workspaceRoot.replace(/^\/+/, '')}/*/${readableSubdir}/**`
   const permissionMarker = 'permission:\n'
   const taskPermissionMarker = '  task: deny\n'
 
@@ -124,6 +149,9 @@ function hardenGeneratedAgentFile(cwd, fileName) {
   if (fileName === PDF_INTAKE_AGENT_FILE) {
     hardenedSource = hardenPdfIntakeOutcomeContract(hardenedSource, agentPath)
   }
+  if (fileName === ROOM_DIMENSIONS_AGENT_FILE) {
+    hardenedSource = hardenRoomDimensionsOutcomeContract(hardenedSource, agentPath)
+  }
 
   for (const required of [
     '  read: true',
@@ -135,7 +163,7 @@ function hardenGeneratedAgentFile(cwd, fileName) {
     '  bash: deny',
   ]) {
     if (!hardenedSource.includes(required)) {
-      throw new Error(`Generated PDF agent ${fileName} is missing required policy: ${required}`)
+      throw new Error(`Generated property document agent ${fileName} is missing required policy: ${required}`)
     }
   }
   for (const forbidden of [
@@ -147,7 +175,7 @@ function hardenGeneratedAgentFile(cwd, fileName) {
     'open-mercato_agent_orchestrator_run_skill_script',
   ]) {
     if (hardenedSource.includes(forbidden)) {
-      throw new Error(`Generated PDF agent ${fileName} unexpectedly grants: ${forbidden.trim()}`)
+      throw new Error(`Generated property document agent ${fileName} unexpectedly grants: ${forbidden.trim()}`)
     }
   }
 
@@ -156,26 +184,44 @@ function hardenGeneratedAgentFile(cwd, fileName) {
 }
 
 export function hardenPropertyPdfAgentFile(cwd = process.cwd()) {
-  const results = PROPERTY_PDF_AGENT_FILES.map((fileName) =>
-    hardenGeneratedAgentFile(cwd, fileName),
+  const results = PROPERTY_DOCUMENT_AGENT_FILES.map(({ fileName, readableSubdir }) =>
+    hardenGeneratedAgentFile(cwd, fileName, readableSubdir),
   )
-  // The standalone MCP loader keys its app-local bundle only by the generated
-  // registry mtime. Invalidate once when the tool source is newer; after the
-  // watcher rebuilds the bundle, repeated hardening remains idempotent.
-  const toolSource = path.resolve(cwd, 'src/modules/property_documents/ai-tools.ts')
-  const toolBundle = path.resolve(cwd, '.mercato/generated/ai-tools.generated.bundled.mjs')
-  try {
-    if (fs.statSync(toolSource).mtimeMs > fs.statSync(toolBundle).mtimeMs) {
-      fs.rmSync(toolBundle)
-    }
-  } catch (error) {
-    if (
-      typeof error !== 'object' ||
-      error === null ||
-      !('code' in error) ||
-      error.code !== 'ENOENT'
-    ) {
-      throw error
+  // The standalone loaders key app-local bundles by generated registry mtimes,
+  // so app-owned transitive dependencies otherwise stay stale across restarts.
+  const bundleInvalidations = [
+    {
+      sources: ['src/modules/property_documents/ai-tools.ts'],
+      bundle: '.mercato/generated/ai-tools.generated.bundled.mjs',
+    },
+    {
+      sources: [
+        'src/modules/property_documents/di.ts',
+        'src/modules/property_documents/room-dimensions-vision.ts',
+      ],
+      bundle: '.mercato/generated/di.generated.mjs',
+    },
+  ]
+  for (const invalidation of bundleInvalidations) {
+    const bundlePath = path.resolve(cwd, invalidation.bundle)
+    try {
+      const bundleMtime = fs.statSync(bundlePath).mtimeMs
+      const sourceIsNewer = invalidation.sources.some(
+        (source) => fs.statSync(path.resolve(cwd, source)).mtimeMs > bundleMtime,
+      )
+      if (sourceIsNewer) {
+        fs.rmSync(bundlePath)
+        fs.rmSync(`${bundlePath}.cache.json`, { force: true })
+      }
+    } catch (error) {
+      if (
+        typeof error !== 'object' ||
+        error === null ||
+        !('code' in error) ||
+        error.code !== 'ENOENT'
+      ) {
+        throw error
+      }
     }
   }
   return results.some(Boolean)

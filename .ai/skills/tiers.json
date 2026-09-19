@@ -181,6 +181,7 @@
         "om-system-extension",
         "om-integration-builder",
         "om-create-ai-agent",
+        "om-create-opencode-agent",
         "om-build-workflow",
         "om-troubleshooter",
         "om-framework-context",

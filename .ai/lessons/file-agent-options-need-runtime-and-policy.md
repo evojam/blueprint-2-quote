@@ -2,7 +2,7 @@
 title: "Carry file-agent options through runtime and policy generation"
 modules: ["agent_orchestrator", "property_documents"]
 areas: ["ai-workflow", "framework-context"]
-topics: ["file-agents", "generated-files", "version-skew", "manifest-validation", "artifact-outcomes"]
+topics: ["file-agents", "generated-files", "version-skew", "manifest-validation", "artifact-outcomes", "image-vision", "bundle-cache"]
 ---
 
 # Carry file-agent options through runtime and policy generation
@@ -16,5 +16,7 @@ topics: ["file-agents", "generated-files", "version-skew", "manifest-validation"
 **Semantic finalization addendum**: A syntactically valid model manifest can still violate cross-field invariants. Generic finalizer errors strand an otherwise correct run, while first-error-only validation forces repeated guess-and-check calls. Aggregate controlled semantic violations into one bounded response, state the same invariants in the agent prompt, and allow exactly one corrected finalization against the existing server-owned inspection. Keep the established failure code and artifact schema. Artifact agents must also show the complete `submit_outcome` discriminator and paths in `OUTCOME.md`; use a non-JSON fence for value examples because the generator interprets the first fenced `json` object as a JSON Schema.
 
 **Development reload**: The standalone MCP HTTP process retains its imported AI-tool bundle, and OpenCode retains generated agent profiles. Regeneration and a Next.js restart do not refresh either process. After changing an app-owned tool or file-agent prompt, restart the MCP process and OpenCode before evaluating a new trace; then verify the ESM app-module bundle and generated profile contain the new contract.
+
+**Image-vision addendum**: A successful OpenCode `read` call for a PNG proves path access, not that the selected model received image pixels. Prove image capability with a real run. When it does not, use a bounded server-owned vision tool that derives the active workspace from trusted session context, validates one image by byte signature/size, and sends a data URL under a strict schema. The generated DI ESM bundle can remain stale even when its transitive app service changes; invalidate both the bundle and its cache when either `di.ts` or that service is newer. In local development the standalone sidecar can also inherit empty/default AI variables instead of the repo `.env`; load an existing local env file only as a documented hackathon fallback, while production still fails closed without process credentials.
 
 **Applies to**: Agent Orchestrator file agents, `.mercato/generated/file-agents.generated.ts`, `docker/opencode/agents/*.md`, and app-owned generation scripts.
