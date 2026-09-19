@@ -39,6 +39,14 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'business_rules', from: '@open-mercato/core' },
   { id: 'workflows', from: '@open-mercato/core' },
   { id: 'communication_channels', from: '@open-mercato/core' },
+  // The Communications Hub resolves an outbound adapter by `providerKey`, and the
+  // adapter only reaches the registry through this module's `register()`. The
+  // `@open-mercato/channel-resend` dependency alone does nothing: without this entry
+  // `yarn generate` writes a DI registry with no Resend adapter, the env preset never
+  // seeds credentials, and every send throws "No ChannelAdapter registered for
+  // providerKey 'resend'" at runtime with no boot-time warning. Must follow
+  // `communication_channels` and `integrations` — it declares both as requirements.
+  { id: 'channel_resend', from: '@open-mercato/channel-resend' },
   { id: 'ai_assistant', from: '@open-mercato/ai-assistant' },
   { id: 'inbox_ops', from: '@open-mercato/core' },
   { id: 'catalog_seed', from: '@app' },
