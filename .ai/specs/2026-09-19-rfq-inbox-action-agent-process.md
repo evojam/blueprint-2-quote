@@ -7,7 +7,7 @@
 
 ## TLDR
 
-The AI Action Inbox (`inbox_ops`) already turns an incoming e-mail into reviewable proposed actions, and `sales` already executes one of them into a draft quote. What is missing is everything after acceptance: a quote created from a property RFQ sits inert while the PDF brief and floor plans attached to the same e-mail go unread. This specification adds the app-owned seam that closes the gap — accepting the inbox action guarantees the customer exists in the CRM, saves the RFQ as a draft `SalesQuote` linked to that customer, and runs the e-mail's PDF through the agent chain `pdf_intake → room_dimensions → catalog_matcher`, so an operator reviewing a proposal is starting an agentic analysis rather than only filing a record. It is the first segment of a process that will eventually run through to pricing and a CRM offer awaiting human approval.
+The AI Action Inbox (`inbox_ops`) already turns an incoming e-mail into reviewable proposed actions, and `sales` already executes one of them into a draft quote. What is missing is everything after acceptance: a quote created from a property RFQ sits inert while the PDF brief and floor plans attached to the same e-mail go unread. This specification adds the app-owned seam that closes the gap — accepting the inbox action guarantees the customer exists in the CRM, saves the RFQ as a `CustomerDeal` owned by that customer, and runs the e-mail's PDF through the agent chain `pdf_intake → room_dimensions → catalog_matcher`, so an operator reviewing a proposal is starting an agentic analysis rather than only filing a record. It is the first segment of a process that will eventually run through to pricing and a CRM offer awaiting human approval.
 
 ## Problem Statement
 
@@ -15,18 +15,18 @@ A property RFQ arrives as an e-mail with a PDF: a written brief plus plan-view d
 
 The customer side is just as loose. The extraction worker already proposes `create_contact` for unmatched participants and `link_contact` for matched ones, and sorts them before the quote action — but those are *separate* actions: an operator can reject them, they can fail on their own, and the quote's own customer resolution is a best-effort `resolveCustomerEntityIdByEmail` fallback (`inbox_ops/lib/executionHelpers.ts:367`). Nothing guarantees that accepting the RFQ leaves a customer record behind it.
 
-So the demo path breaks exactly where it should get interesting: the operator accepts a proposal, gets a near-empty draft quote, and the analysis that would populate it is a separate manual errand. The record that should anchor the whole downstream process is created without anything downstream being told it exists.
+So the demo path breaks exactly where it should get interesting: the operator accepts a proposal, gets a near-empty draft quote, and the analysis that would populate it is a separate manual errand. The record that should anchor the whole downstream process is created without anything downstream being told it exists — and, as the decision table below sets out, a quote is the wrong record to anchor it with in the first place.
 
 ## Overview and Success Measures
 
-- **Primary outcome:** accepting the RFQ action in the Inbox produces a draft quote *and* a started agent run over the e-mail's PDF, with no manual step in between.
+- **Primary outcome:** accepting the RFQ action in the Inbox produces a CRM case *and* a started agent run over the e-mail's PDF, with no manual step in between.
 - **Leading indicators:** `rfq_intake.rfq.created` observed after an accepted action; a workflow instance for `property_documents.pdf_intake` bound to the quote.
 - **Baseline:** zero — the link does not exist; the agent is started by hand.
-- **Market / product reference:** the "inbox → structured record → automated enrichment → human approval" loop is the shape every AI-assisted CRM intake converges on. What they get right and we adopt: the human reviews *before* the record is written, not after. What they carry and we skip: a bespoke RFQ object. Our RFQ is the draft quote the process is going to fill in anyway.
+- **Market / product reference:** the "inbox → structured record → automated enrichment → human approval" loop is the shape every AI-assisted CRM intake converges on. What they get right and we adopt: the human reviews *before* the record is written, not after. What they carry and we skip: a bespoke RFQ object. Our RFQ is the CRM case the platform already models, and the offer document is produced at the end rather than reserved at the start.
 
 ## Goals
 
-- **REQ-001** — Accepting the RFQ action in the AI Action Inbox saves the request as a draft `SalesQuote` in `sales`, scoped to the acting user's tenant and organization.
+- **REQ-001** — Accepting the RFQ action in the AI Action Inbox saves the request as a `CustomerDeal` in `customers`, scoped to the acting user's tenant and organization and owned by the guaranteed contact.
 - **REQ-005** — Accepting the action guarantees the sender exists as a CRM contact: created when absent, enriched in empty fields only when present, together with the company record when the thread names one. The RFQ is linked to that contact.
 - **REQ-002** — The same acceptance starts, post-commit and without blocking or failing the action, a workflow that runs `property_documents.pdf_intake` over the e-mail's PDF, then `property_documents.room_dimensions` over **every** extracted floor plan, then `property_documents.catalog_matcher` over **every** requirement in the brief. Coverage is complete: a service the matcher never saw cannot reach the quote.
 - **REQ-003** — The Inbox makes it legible that this action starts an agentic analysis of the brief and floor plans, not merely a quote creation.
@@ -35,7 +35,7 @@ So the demo path breaks exactly where it should get interesting: the operator ac
 
 ## Non-goals
 
-- Mapping the chain's output onto quote lines, pricing, or an offer. That is the next segment of the process, not this one.
+- Creating the `SalesQuote` itself, and mapping the chain's output onto quote lines or pricing. The offer document belongs to the pricing segment, not to intake.
 - More than one PDF per RFQ. One brief PDF is the whole input; the plans, rooms and requirements inside it are many and all of them are covered.
 - A dedicated RFQ entity, RFQ CRUD pages, or RFQ navigation.
 - Opening the closed `extractedActionSchema` action-type enum upstream (see Risks).
@@ -56,11 +56,11 @@ The app's own event exists because `inbox_ops.action.executed` carries no attach
 
 | Decision | Rationale | Alternative considered | Why rejected / deferred |
 |---|---|---|---|
-| RFQ **is** a draft `SalesQuote` | The process fills this record in anyway; sales UI shows it today; zero new schema | App-owned RFQ entity; RFQ entity *and* quote | Own CRUD, UI, migration and a second record to keep in sync, for no capability the process needs now |
-| Override the `create_quote` definition, delegating `execute` to core | Lets us own the prompt rules and the label without reimplementing quote creation | Register a new `create_rfq` type | `extractedActionSchema` (`inbox_ops/data/validators.ts:183`) is a closed enum used as the LLM's structured-output schema — the model literally cannot emit a new type |
+| RFQ **is** a `CustomerDeal`; the quote is produced later, when there is something to price | `sales.quotes.create` allocates a number from `salesDocumentNumberGenerator` (`sales/commands/documents.ts:4724`) under a per-org unique index, so a quote at intake burns an offer number on every request including the ones that die. `SalesQuote` is an outward document — `valid_from`/`valid_until`, a unique `acceptance_token` — and carries no parent or revision field, so the several quotes one RFQ produces over time have nothing tying them together. `CustomerDeal` has exactly the intake-stage vocabulary: `pipeline_stage_id`, `value_amount`, `probability`, `expected_close_at`, `owner_user_id`, `source`, `closure_outcome`, `loss_reason_id`, plus stage history | Draft `SalesQuote` as the RFQ (this spec's first answer); an app-owned RFQ entity | The quote answer burns numbers and cannot express "lost before pricing". An own entity duplicates a CRM case the platform already models |
+| Keep overriding the `create_quote` type even though it now creates a deal | The closed enum offers nothing closer: a customer asking for a quote is what the LLM sees, and `create_quote` is the type it can emit. The stored `action_type` therefore stops describing the behavior; the label and description carry the meaning for people | Register a new `create_rfq` type | `extractedActionSchema` (`inbox_ops/data/validators.ts:183`) is a closed enum used as the LLM's structured-output schema — the model literally cannot emit a new type |
 | Own event `rfq_intake.rfq.created` | Carries the attachments the agent needs; stable seam for later steps | Trigger directly on `inbox_ops.action.executed` | Payload has no attachments; `contextMapping` cannot reach outside the payload |
 | Code-defined workflow with an embedded event trigger | Fully in git, regenerated by `yarn generate`, no seed and no click; a DB row with the same `workflowId` later shadows it, so Studio customization still wins | `ProcessDefinition` seeded imperatively in `setup.ts` | No code discovery exists for process definitions; it would be an imperative seed. Deferred until the cockpit view is actually needed |
-| Ensure the contact inside the action's `execute`, before delegating to `sales` | Makes the guarantee part of the accepted action rather than of a sibling action the operator may reject; lets us pass a resolved `customerEntityId` into quote creation instead of relying on the e-mail fallback | Rely on the worker's auto `create_contact` / `link_contact` actions | They are separate, rejectable actions; REQ-005 asks for a guarantee, not a suggestion |
+| Ensure the contact inside the action's `execute`, before creating the deal | Makes the guarantee part of the accepted action rather than of a sibling action the operator may reject; lets us hang the deal off a resolved customer instead of relying on the e-mail fallback | Rely on the worker's auto `create_contact` / `link_contact` actions | They are separate, rejectable actions; REQ-005 asks for a guarantee, not a suggestion |
 | Enrich only empty fields on an existing contact | A human correction in the CRM outranks a name or phone the LLM lifted from a signature | Overwrite with the latest e-mail's data | The next RFQ would silently undo a costing clerk's manual fix |
 | Drop the installed demo workflows by filtering `registerCodeWorkflows` in the app's own `src/bootstrap-common.ts` | The unified `modules.ts` overrides have no `workflows` domain; this is the only app-owned seam, and it is one line in git that applies to every environment | Disable each one in the UI (`Włączony` / the `customize` route) | Per organization, lost on a fresh database, invisible in review |
 | Keep the agents single-input and put the iteration in our own commands, which call the `agentRuntime` DI service once per item | The agents are narrow on purpose so each stays testable in isolation, and the engine offers no dynamic fan-out anyway: `PARALLEL_FORK` opens one branch per outgoing static transition (`workflows/lib/parallel-handler.ts:120`), nested forks are rejected (`step-handler.ts:493`), `SUB_WORKFLOW` starts exactly one child (`step-handler.ts:1120`), and no `forEach` construct exists. A loop in our code has a count we can assert | Widen the agents to accept lists; or push iteration into an orchestrating agent with sub-agents | Widening breaks isolated testability and their tools refuse more than one staged input (`ai-tools.ts:600`, `ai-tools.ts:576`). Sub-agent fan-out puts the iteration count in the model's hands, which is where items get silently dropped |
@@ -72,11 +72,11 @@ The app's own event exists because `inbox_ops.action.executed` carries no attach
 
 | Term / invariant | Precise meaning or rule | Source of truth | Failure behavior |
 |---|---|---|---|
-| RFQ | A draft `SalesQuote` created from an accepted inbox action, linked to its proposal through the quote's source metadata | `sales.sales_quotes` | n/a — created by the installed `sales` execute path |
+| RFQ | A `CustomerDeal` created from an accepted inbox action, in the pipeline's first stage, carrying the source proposal and e-mail ids | `customers.customer_deals` | Deal creation failing fails the action; nothing downstream starts |
 | RFQ analysis start | Exactly one agent run per accepted `create_quote` action that has at least one attachment | `rfq_intake.rfq.created` emission | No attachments → no event, logged; the quote still exists |
 | Contact guarantee | After a successful action there is exactly one CRM person for the sender's e-mail, plus a company when the thread named one and the person is linked to it | `customers` (`customer_entities`) | Contact resolution or creation failing fails the action before the quote is created |
 | Registered workflows | Exactly one code workflow reaches the registry in this app: `rfq_intake.analysis` | `src/bootstrap-common.ts` | A denied id that no longer exists upstream is ignored, not an error |
-| Analysed plan | Every entry of `floor-plans.json`, each promoted to an attachment on the quote and read by its own `room_dimensions` run | `floor-plans.json` produced by `pdf_intake` | Empty manifest → the step is a no-op, recorded on the run; one plan failing does not abandon the rest |
+| Analysed plan | Every entry of `floor-plans.json`, each promoted to an attachment on the deal and read by its own `room_dimensions` run | `floor-plans.json` produced by `pdf_intake` | Empty manifest → the step is a no-op, recorded on the run; one plan failing does not abandon the rest |
 | Matcher input | One `catalog_matcher` run per entry of `brief.json`'s `requirements[]` — one requirement per call, which is what the agent's own contract expects | `brief.json` | Empty requirements → the step is a no-op; an unmatched requirement is reported, never silently dropped |
 | Attachment set | `InboxEmail.attachment_ids` of the e-mail behind the action's proposal | `inbox_ops.inbox_emails` | Empty or unresolvable → treated as "no attachments" |
 
@@ -84,7 +84,9 @@ The app's own event exists because `inbox_ops.action.executed` carries no attach
 
 | Actor | Allowed outcomes | Scope rule | Required feature IDs |
 |---|---|---|---|
-| Inbox operator | Accept the RFQ action; thereby create the draft quote and start the analysis | own organization | `sales.quotes.manage` (unchanged from the core definition) |
+| Inbox operator | Accept the RFQ action; thereby create the CRM case and start the analysis | own organization | `sales.quotes.manage` **and** `customers.deals.manage` |
+
+The two features are not a choice. The execution engine reads the gate from the installed `REQUIRED_FEATURES_MAP` by action type (`executionEngine.ts:568`), not from our definition, so the enforced feature stays `sales.quotes.manage` whatever we register; `customers.deals.manage` is what the command we call needs. An operator holding only the first gets a failed action with a readable authorization error, not a silent no-op.
 
 Scope is not derived by this module. `tenantId` / `organizationId` arrive on the `inbox_ops.action.executed` payload, emitted by `executionEngine` from the authenticated execution context, and are passed through unmodified to our event and onward to the workflow trigger. The subscriber performs no unscoped read: the proposal and e-mail lookups are filtered by the event's tenant and organization, and a missing scope aborts rather than widening the query. No system-scope operation is introduced.
 
@@ -92,7 +94,7 @@ Scope is not derived by this module. `tenantId` / `organizationId` arrive on the
 
 | Capability | Reuse / extend / app-own | Existing module or new module | Integration seam | Why |
 |---|---|---|---|---|
-| Quote creation | Reuse | `sales` | Delegate to the core `create_quote` definition's `execute` | The installed path stays the only writer of quotes |
+| Case creation | Reuse | `customers` | Command `customers.deals.create` | The installed path stays the only writer of deals; we add no entity |
 | E-mail → proposal → action | Reuse unchanged | `inbox_ops` | — | No installed code is modified |
 | Action definition | UMES-style override | `rfq_intake` → `inbox-actions.ts` | Generated registry, last entry wins | Owns prompt rules and label only |
 | Artifact → attachment | Reuse | `agent_orchestrator` | Command `agent_orchestrator.artifact.promote` | Idempotent by `promotedAttachmentId`; we add no storage writer |
@@ -110,12 +112,12 @@ No app-owned entity, no migration.
 e-mail (PDF)
   -> inbox_ops extraction        -> proposal + action `create_quote` (category: rfq)
   -> operator accepts            -> rfq_intake execute:
-                                      ensure contact (+ company)  -> customerEntityId
-                                   -> sales execute  -> SalesQuote (draft)  [= the RFQ]
+                                      ensure contact (+ company)     -> customerEntityId
+                                      customers.deals.create         -> CustomerDeal  [= the RFQ]
                                  -> event `inbox_ops.action.executed`
   -> rfq_intake subscriber (post-commit)
          resolves proposal -> InboxEmail.attachment_ids
-      -> event `rfq_intake.rfq.created` { quoteId, proposalId, emailId, __files }
+      -> event `rfq_intake.rfq.created` { dealId, proposalId, emailId, __files }
   -> workflows event-trigger (wildcard subscriber, code triggers included)
       -> workflow `rfq_intake.analysis`:
            START
@@ -127,7 +129,7 @@ e-mail (PDF)
 
 - **Module boundaries:** `rfq_intake` owns no data, only the join. It stays a separate module from `property_documents` because the agent must remain usable without the inbox, and from any future pricing module because that one will own records.
 - **Extension points used:** the inbox action registry (`registry.inbox-actions`), the module event config, the code workflow registry (`registry.workflows`), and app-level i18n. No installed file is edited.
-- **Compatibility:** the override keeps the `create_quote` type id, `requiredFeature`, and payload schema identical, so stored actions, ACL and the execution engine behave exactly as before. The observable change is the label and the added side effect.
+- **Compatibility:** the override keeps the `create_quote` type id and payload schema identical, so stored actions and the execution engine behave exactly as before. What changes is what the action *does* — a CRM case instead of a quote — which is why the label change in REQ-003 is part of the same slice rather than cosmetic.
 
 Two verified facts this design rests on:
 
@@ -140,9 +142,9 @@ Two verified facts this design rests on:
 
 1. Operator opens AI Action Inbox → Proposals, and a proposal from a property RFQ e-mail.
 2. The action reads as saving the RFQ and starting the AI analysis of the brief and floor plans.
-3. Operator accepts. The contact is resolved by e-mail — created when new, enriched in its empty fields when known — the company is ensured when the thread named one, and the draft quote is created by the installed `sales` path with that customer already linked. The action shows executed.
+3. Operator accepts. The contact is resolved by e-mail — created when new, enriched in its empty fields when known — the company is ensured when the thread named one, and a `CustomerDeal` is opened for that customer in the pipeline's first stage. The action shows executed.
 4. Post-commit, the analysis starts. The operator's screen does not wait on it.
-5. Failure cases: contact creation failing fails the action before any quote exists, and the operator sees why; no PDF attachment → no analysis starts, the quote still exists, and the reason is logged rather than silently swallowed; the agent failing later fails its own run, never the executed action.
+5. Failure cases: contact or deal creation failing fails the action, and the operator sees why; no PDF attachment → no analysis starts, the quote still exists, and the reason is logged rather than silently swallowed; the agent failing later fails its own run, never the executed action.
 
 ## UI and Interaction Contracts
 
@@ -152,7 +154,7 @@ N/A — page layouts, responsive and keyboard contracts: no authored surface.
 
 ## Data Models
 
-N/A — this specification introduces no entity, no field and no migration. The RFQ is an installed `sales_quotes` row written by the installed code path; the link back to its proposal is the source metadata `sales` already writes.
+N/A — this specification introduces no entity, no field and no migration. The RFQ is an installed `customer_deals` row written by `customers.deals.create`; the link back to its proposal and source e-mail is carried in the deal's own fields (`source`, title/description) rather than in a new column.
 
 ## API, Command, and Error Contracts
 
@@ -162,13 +164,13 @@ N/A — no route and no command is added. The module contributes a registry entr
 
 | Trigger | Producer | Consumer | Side effect | Retry / idempotency / audit behavior |
 |---|---|---|---|---|
-| `inbox_ops.action.executed` | `inbox_ops` (`executionEngine.ts:156`) | `rfq_intake` subscriber | Emits `rfq_intake.rfq.created` when `actionType === 'create_quote'` and attachments exist | Persistent subscriber; a redelivery re-emits, and the workflow trigger's own concurrency guard bounds duplicate instances |
+| `inbox_ops.action.executed` | `inbox_ops` (`executionEngine.ts:156`) | `rfq_intake` subscriber | Emits `rfq_intake.rfq.created` when `actionType === 'create_quote'`, the created entity is a deal, and attachments exist | Persistent subscriber; a redelivery re-emits, and the workflow trigger's own concurrency guard bounds duplicate instances |
 | `rfq_intake.rfq.created` | `rfq_intake` | `workflows:event-trigger` | Starts the `rfq_intake.analysis` workflow instance | Trigger config carries `maxConcurrentInstances`; the run is the unit of retry |
 
 Event payload (shaped for the agent so `contextMapping` stays 1:1):
 
 ```
-{ quoteId, proposalId, emailId, tenantId, organizationId,
+{ dealId, proposalId, emailId, tenantId, organizationId,
   __files: { attachments: [{ attachmentId }] } }
 ```
 
@@ -176,7 +178,7 @@ The prefix `rfq_intake.` is not in the event-trigger subscriber's excluded list 
 
 ## Security, Privacy, and Compliance
 
-- **Authorization:** unchanged. The action keeps `requiredFeature: 'sales.quotes.manage'`; the subscriber runs behind an already-authorized execution and grants nothing.
+- **Authorization:** the enforced gate stays the installed `sales.quotes.manage`; `customers.deals.manage` is required by the command the action calls. The subscriber runs behind an already-authorized execution and grants nothing.
 - **Tenant isolation:** every lookup in the subscriber is filtered by the event's `tenantId` and `organizationId`; absent scope aborts the handler instead of querying unscoped.
 - **Sensitive data:** the RFQ PDF is customer content. It is not copied into the event — only `attachmentId` references travel — and it stays under the installed attachments module's storage and access rules. The agent's own prompt already treats document content as untrusted data and is forbidden from writing business records.
 - **Abuse and failure modes:** a malicious PDF cannot reach a business record through this path, because the agent's only durable output is its artifact set. A redelivered event can start a duplicate run; it cannot create a duplicate quote, since quote creation happens in the installed action path, not here.
@@ -185,18 +187,18 @@ The prefix `rfq_intake.` is not in the event-trigger subscriber's excluded list 
 
 | Test ID | Level | Setup / fixture | Actions | Assertions | Requirement IDs |
 |---|---|---|---|---|---|
-| TEST-001 | unit | Executed `create_quote` action, proposal, e-mail with one attachment | Invoke the subscriber with the event payload | `rfq_intake.rfq.created` emitted once, with `quoteId`, `proposalId` and `__files.attachments[0].attachmentId`, scope preserved | REQ-002 |
+| TEST-001 | unit | Executed `create_quote` action, proposal, e-mail with one attachment | Invoke the subscriber with the event payload | `rfq_intake.rfq.created` emitted once, with `dealId`, `proposalId` and `__files.attachments[0].attachmentId`, scope preserved | REQ-002 |
 | TEST-002 | unit | Same, e-mail with no attachments | Invoke the subscriber | No event emitted; no throw | REQ-002 |
 | TEST-003 | unit | Generated registry | `getInboxAction('create_quote')` | Returns the `rfq_intake` definition; `type` and `requiredFeature` unchanged from core | REQ-001, REQ-003 |
 | TEST-004 | unit | Generated workflow registry | Read `rfq_intake.analysis` | Definition present after validation (i.e. not dropped by `registerCodeWorkflows`), one `INVOKE_AGENT` activity with the agent id, one event trigger on `rfq_intake.rfq.created` | REQ-004 |
-| TEST-006 | unit | No CRM contact for the sender's e-mail | Execute the action | `customers.people.create` called once; the resolved id is passed to the delegated quote creation | REQ-005 |
+| TEST-006 | unit | No CRM contact for the sender's e-mail | Execute the action | `customers.people.create` called once; the resolved id is carried into `customers.deals.create` | REQ-005, REQ-001 |
 | TEST-007 | unit | Existing contact with a name, no phone; e-mail signature carries a different name and a phone | Execute the action | Phone filled; name unchanged | REQ-005 |
 | TEST-008 | unit | Payload names a company with no CRM record | Execute the action | Company ensured and the person linked to it | REQ-005 |
 | TEST-009 | unit | Contact already created by the worker's own `create_contact` action in the same proposal | Execute the action | No second person created | REQ-005 |
 | TEST-011 | unit | Agent run whose `floor-plans.json` names three plans | Execute `rfq_intake.plans.analyze` | Three promotions and three `room_dimensions` runs; re-execution promotes nothing new; one plan throwing still leaves the other two analysed | REQ-002 |
 | TEST-012 | unit | `brief.json` with five requirements, one of which the matcher cannot match | Execute `rfq_intake.requirements.match` | Five `catalog_matcher` runs; the unmatched requirement is reported, not dropped | REQ-002 |
 | TEST-010 | unit | The generated `allCodeWorkflows` | Apply the bootstrap filter | Only `rfq_intake.analysis` survives; a denied id absent upstream does not throw | REQ-006 |
-| TEST-005 | manual (demo) | Enterprise + agents flags on, seeded org, RFQ e-mail with PDF | Accept the action in the Inbox | Draft quote exists; an agent run for `property_documents.pdf_intake` starts and produces `brief.json` + `floor-plans.json` | REQ-001, REQ-002 |
+| TEST-005 | manual (demo) | Enterprise + agents flags on, seeded org, RFQ e-mail with PDF | Accept the action in the Inbox | The deal exists in the pipeline; an agent run for `property_documents.pdf_intake` starts and produces `brief.json` + `floor-plans.json` | REQ-001, REQ-002 |
 
 TEST-005 is deliberately manual for this slice: an automated end-to-end run would need the OpenCode agent runtime in CI, which is its own piece of work. `HACK(hackathon)` noted at the seam.
 
@@ -205,7 +207,7 @@ TEST-005 is deliberately manual for this slice: an automated end-to-end run woul
 ### Phase 1 — RFQ is saved and the analysis starts
 
 - **Depends on:** `property_documents.pdf_intake`, already merged to `main`; `OM_ENABLE_ENTERPRISE_MODULES=true` and `OM_ENABLE_ENTERPRISE_MODULES_AGENTS=true` locally.
-- **Outcome:** accepting the inbox action creates the draft quote, guarantees the contact, and runs the three-agent chain over its PDF.
+- **Outcome:** accepting the inbox action opens the CRM case, guarantees the contact, and runs the three-agent chain over its PDF.
 - **Deliverables:** `src/modules/rfq_intake/{index.ts,inbox-actions.ts,events.ts,subscribers/startRfqAnalysis.ts,commands/plansAnalyze.ts,commands/requirementsMatch.ts,workflows.ts}`; `rfq_intake` added to `src/modules.ts` **after** `sales`; i18n label change in `src/i18n/pl.json` and its English counterpart; the denylist filter in `src/bootstrap-common.ts`.
 - **Requirements closed:** REQ-001 … REQ-006
 - **Tests:** TEST-001 … TEST-004 and TEST-006 … TEST-012 automated, TEST-005 manual
@@ -215,28 +217,28 @@ TEST-005 is deliberately manual for this slice: an automated end-to-end run woul
 **Steps** (each leaves the app working):
 
 1. Scaffold `src/modules/rfq_intake` (index + module registration after `sales`), run `yarn generate`, confirm the module is discovered and nothing else changed.
-2. Add `inbox-actions.ts` overriding `create_quote` by delegating `execute` to the core `sales` definition, plus RFQ-specific `promptRules`. Run `yarn generate` and **verify empirically that the app entry wins the registry map** (`getInboxAction('create_quote')`). If it does not, fall back: drop the override, keep the behavior in the subscriber, and record the reason inline. TEST-003.
+2. Add `inbox-actions.ts` overriding `create_quote` with an `execute` that opens a `CustomerDeal` through `customers.deals.create`, plus RFQ-specific `promptRules`. Run `yarn generate` and **verify empirically that the app entry wins the registry map** (`getInboxAction('create_quote')`). If it does not, fall back: drop the override, keep the behavior in the subscriber, and record the reason inline. TEST-003.
 3. Change the two i18n labels. `yarn i18n:check-hardcoded`.
-4. Add the contact guarantee to the override's `execute`: resolve by e-mail via `resolveCustomerEntityIdByEmail`, create through `customers.people.create` or enrich empty fields through `customers.people.update`, ensure the company when the payload names one, then delegate to the core `sales` execute with `customerEntityId` set on the payload. Idempotent by e-mail, so it stays a no-op when the worker's own contact action already ran. TEST-006 … TEST-009.
+4. Add the contact guarantee to the override's `execute`: resolve by e-mail via `resolveCustomerEntityIdByEmail`, create through `customers.people.create` or enrich empty fields through `customers.people.update`, ensure the company when the payload names one, then open the deal through `customers.deals.create` with that `customerEntityId`, the pipeline's first stage, and the source proposal and e-mail recorded on it. Idempotent by e-mail, so it stays a no-op when the worker's own contact action already ran. TEST-006 … TEST-009.
 5. Add `events.ts` declaring `rfq_intake.rfq.created` and the subscriber on `inbox_ops.action.executed`, emitting post-commit with the attachment-shaped payload. TEST-001, TEST-002.
 6. Add the two looping commands. `rfq_intake.plans.analyze` reads `floor-plans.json` from the run's artifacts and, per plan, promotes the PNG through `agent_orchestrator.artifact.promote` and calls `agentRuntime.run('property_documents.room_dimensions', …)` with the workflow instance and step ids. `rfq_intake.requirements.match` reads `brief.json` and calls `agentRuntime.run('property_documents.catalog_matcher', { text, limit })` once per requirement. One item failing is recorded and the loop continues. TEST-011, TEST-012.
 7. Add `workflows.ts` with `rfq_intake.analysis` — the four-node chain above, embedded event trigger on `rfq_intake.rfq.created` with a 1:1 `contextMapping`, and `outputMapping` on the `INVOKE_AGENT` activity so the next step reads its result from the workflow context. Cast the activity type where `@open-mercato/shared`'s stale `ActivityType` union rejects `INVOKE_AGENT`, with a comment naming the reason. The same file registers both commands through `registerWorkflowSafeCommands` — a command a workflow calls must be declared workflow-safe, and a new one is **not** `defaultEnabled`, so the demo tenant has to enable them in settings. TEST-004.
 8. Filter `registerCodeWorkflows` in `src/bootstrap-common.ts` against a named denylist — `workflows.simple-approval`, `workflows.checkout-demo`, `sales.order-approval` — with a comment stating that the first two are shipped demos and the third is a deliberate product removal. TEST-010.
 9. Run TEST-005 by hand end to end; record what actually happened, including anything stubbed.
 
-### Phase 2 — Brief and floor plans reach the quote (out of scope here)
+### Phase 2 — From analysis to a priced offer (out of scope here)
 
 Named only so Phase 1 is not mistaken for the whole process:
 
 - **Fan-out as instances.** The Phase 1 loops run inside one workflow step. Turning each item into its own workflow instance, chained by events, bounds step duration and makes every item independently retryable and disposable. A fourth agent is then a new event plus a new code workflow, touching none of the existing three.
 - **Multiple PDFs.** `__files.attachments` already accepts up to 20 entries; what blocks it is our own `process_pdf`, which refuses more than one staged PDF (`ai-tools.ts:600`) and writes fixed output filenames. Per-PDF output directories would lift that.
-- **The rest of the process:** mapping the chain's output into quote content, pricing, then an offer awaiting human approval.
+- **The rest of the process:** turning rooms and catalog matches into scope items, pricing them, and only then creating the `SalesQuote` — the first moment a document number is worth burning.
 
 ## Requirement Traceability
 
 | Requirement | Journey / surface | Data/API/event contracts | Phase | Tests | Acceptance criterion |
 |---|---|---|---|---|---|
-| REQ-001 | J-001, Inbox proposal detail | `sales_quotes` via installed `create_quote` | Phase 1 | TEST-003, TEST-005 | AC-001 |
+| REQ-001 | J-001, Inbox proposal detail | `customer_deals` via `customers.deals.create` | Phase 1 | TEST-003, TEST-006, TEST-005 | AC-001 |
 | REQ-002 | J-001 steps 4–5 | `inbox_ops.action.executed` → `rfq_intake.rfq.created` | Phase 1 | TEST-001, TEST-002, TEST-005 | AC-002, AC-003 |
 | REQ-003 | Inbox action label | `inbox_ops.action_type.create_quote` | Phase 1 | TEST-003 | AC-004 |
 | REQ-005 | J-001 step 3 | `customers.people.create` / `.update`, `customers.companies.create` | Phase 1 | TEST-006 … TEST-009 | AC-006, AC-007 |
@@ -256,21 +258,21 @@ Prerequisite for the demo environment, not for the code: the enterprise and agen
 | The app module may not win the inbox-action registry map (ordering assumption) | The override silently does nothing | Verified empirically in Step 2 before anything depends on it; TEST-003 fails loudly if not | Fallback path keeps the feature working without the override |
 | `@open-mercato/shared` `ActivityType` lacks `INVOKE_AGENT` | A cast is needed; a future shared-type change could turn it into a type error | Comment naming the reason; TEST-004 asserts the definition survives runtime validation | Accepted |
 | Process cockpit projection (`process_instances`) may not materialize without a `ProcessDefinition` | The run may not appear in the Processes view | Unverified — to be checked during TEST-005 | If the view is needed, add a seeded `ProcessDefinition` bound to the same workflow; no rework of Phase 1 |
-| Closed `extractedActionSchema` enum blocks a true `create_rfq` type | The action is named `create_quote` in data forever, or until upstream changes | `HACK(hackathon)` at the definition; label carries the meaning for users | Accepted; an upstream change is a contract-surface discussion, not this slice |
+| Closed `extractedActionSchema` enum blocks a true `create_rfq` type | The stored `action_type` says `create_quote` while the behavior opens a CRM case — a reader of the raw table is misled | `HACK(hackathon)` at the definition; the label, the description and this spec carry the meaning | Accepted; opening the enum upstream is a contract-surface discussion, not this slice |
 | Company matching by name creates near-duplicates (`Acme` vs `Acme Sp. z o.o.`) | A second company record beside the real one | Reuse of the installed `resolveOrCreateCompany` matching, not our own; TEST-008 | Accepted — the installed `create_contact` action carries the same behavior today |
 | Removing `sales.order-approval` removes a live capability | Orders no longer raise an approval `USER_TASK`; the installed injection widget on the order page (`workflows/widgets/injection/order-approval/widget.client.tsx:47`) has no workflow behind it | Deliberate product decision, recorded here; reversed by deleting one line from the denylist | Accepted — this app quotes, it does not run an order approval chain |
 | A PDF with many plans and many requirements makes one workflow step long-running | The step holds while N + M agent calls complete; a timeout abandons the remainder | Per-item failures are recorded and the loop continues; Phase 2's event chain turns each item into its own instance | Accepted for this slice, and the first thing to revisit if a real brief is large |
 | The looping commands are not `defaultEnabled` as workflow-safe commands | The chain stops after `pdf_intake` on a tenant that never opened the workflow-command settings | Part of TEST-005's manual checklist | Accepted — grandfathering a new command is explicitly discouraged upstream |
 | Event redelivery starts duplicate agent runs | Wasted tokens, duplicate artifacts | Trigger `maxConcurrentInstances`; runs are visible and cancellable | Accepted for the hackathon |
-| Agent runtime absent or failing | No analysis; quote still created | The operator sees the run fail; nothing is faked green | Accepted |
+| Agent runtime absent or failing | No analysis; the deal still exists | The operator sees the run fail; nothing is faked green | Accepted |
 
 ## Acceptance Criteria
 
-- [ ] **AC-001** — An operator accepting the RFQ action in their organization sees a draft `SalesQuote` created, unchanged from today's behavior.
-- [ ] **AC-002** — The same acceptance emits `rfq_intake.rfq.created` carrying the e-mail's attachment ids and the quote id, with tenant and organization preserved.
-- [ ] **AC-003** — An e-mail without attachments produces the quote, no event, and a log line stating why; the action does not fail.
-- [ ] **AC-006** — After a successful action there is exactly one CRM person for the sender's e-mail, linked to the created quote; a pre-existing person keeps every field that was already filled.
-- [ ] **AC-007** — When contact creation fails, the action fails with a readable reason and no quote is created.
+- [ ] **AC-001** — An operator accepting the RFQ action in their organization sees a `CustomerDeal` opened for the sender, in the pipeline's first stage, and no `SalesQuote` and no consumed quote number.
+- [ ] **AC-002** — The same acceptance emits `rfq_intake.rfq.created` carrying the e-mail's attachment ids and the deal id, with tenant and organization preserved.
+- [ ] **AC-003** — An e-mail without attachments produces the deal, no event, and a log line stating why; the action does not fail.
+- [ ] **AC-006** — After a successful action there is exactly one CRM person for the sender's e-mail, owning the created deal; a pre-existing person keeps every field that was already filled.
+- [ ] **AC-007** — When contact or deal creation fails, the action fails with a readable reason and leaves no half-built case.
 - [ ] **AC-004** — The Inbox action label states that accepting saves the RFQ and starts the AI analysis of the brief and floor plans.
 - [ ] **AC-008** — The Workflows list in a fresh environment shows `rfq_intake.analysis` and no installed demo workflow.
 - [ ] **AC-005** — `yarn generate` alone reproduces the whole chain; no UI step and no seeded row is required.
