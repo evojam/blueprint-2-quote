@@ -12,6 +12,7 @@ type CandidateLinearMeasurement = NonNullable<
 >
 type CandidateCalibration = RoomMeasurementCandidate['drawing']['calibrations'][number]
 type CandidateWall = RoomMeasurementCandidate['rooms'][number]['walls'][number]
+type CandidateRoom = RoomMeasurementCandidate['rooms'][number]
 
 const IMAGE = { imageWidthPx: 1000, imageHeightPx: 1000 }
 const evidence = [{ x: 0.02, y: 0.02, width: 0.08, height: 0.03 }]
@@ -159,6 +160,45 @@ function completeCandidate(): RoomMeasurementCandidate {
     ],
     warnings: [],
   }
+}
+
+function secondRoomFrom(candidate: RoomMeasurementCandidate): CandidateRoom {
+  const room = structuredClone(candidate.rooms[0])
+  room.id = 'room-2'
+  room.floor.printedArea = room.floor.printedArea
+    ? { ...room.floor.printedArea, id: 'room-2-area' }
+    : null
+  room.floor.holes = room.floor.holes.map((hole, index) => ({
+    ...hole,
+    id: `room-2-hole-${index}`,
+  }))
+  const wallIdByOriginal = new Map<string, string>()
+  room.walls = room.walls.map((item, index) => {
+    const id = `room-2-wall-${index}`
+    wallIdByOriginal.set(item.id, id)
+    return {
+      ...item,
+      id,
+      length: item.length ? { ...item.length, id: `room-2-wall-length-${index}` } : null,
+      startHeight: item.startHeight
+        ? { ...item.startHeight, id: `room-2-wall-start-height-${index}` }
+        : null,
+      endHeight: item.endHeight
+        ? { ...item.endHeight, id: `room-2-wall-end-height-${index}` }
+        : null,
+    }
+  })
+  room.openings = room.openings.map((opening, index) => ({
+    ...opening,
+    id: `room-2-opening-${index}`,
+    wallId: opening.wallId ? (wallIdByOriginal.get(opening.wallId) ?? null) : null,
+    width: opening.width ? { ...opening.width, id: `room-2-opening-width-${index}` } : null,
+    height: opening.height ? { ...opening.height, id: `room-2-opening-height-${index}` } : null,
+    sillHeight: opening.sillHeight
+      ? { ...opening.sillHeight, id: `room-2-opening-sill-${index}` }
+      : null,
+  }))
+  return room
 }
 
 function finalize(candidate: RoomMeasurementCandidate): RoomMeasurementSet {
@@ -422,6 +462,21 @@ describe('deterministic finalization', () => {
     expect(result.rooms[0].missingInputs.map((item) => item.code)).toEqual(codes)
   })
 
+  it('reports a missing boundary when printed floor evidence cannot establish wall order', () => {
+    const candidate = completeCandidate()
+    candidate.rooms[0].floor.outerBoundary = []
+
+    const result = finalize(candidate)
+    expect(result.rooms[0].readiness).toEqual({
+      floorArea: 'eligible',
+      grossWallArea: 'review_required',
+      netWallArea: 'review_required',
+    })
+    expect(result.rooms[0].missingInputs).toEqual([
+      { code: 'floor_boundary_incomplete', targetId: 'room-1' },
+    ])
+  })
+
   it('computes scene statuses server-side', () => {
     const notPlan = completeCandidate()
     notPlan.sceneKind = 'not_floor_plan'
@@ -456,6 +511,37 @@ describe('controlled semantic failures', () => {
     const selfReference = completeCandidate()
     selfReference.drawing.calibrations[0].realLength.calibrationId = 'cal-1'
     expectSemanticCode(selfReference, 'self_reference')
+  })
+
+  it('rejects wall, opening, and hole IDs duplicated across rooms', () => {
+    const duplicateWall = completeCandidate()
+    const wallRoom = secondRoomFrom(duplicateWall)
+    wallRoom.walls[0].id = duplicateWall.rooms[0].walls[0].id
+    wallRoom.openings = []
+    duplicateWall.rooms.push(wallRoom)
+    expectSemanticCode(duplicateWall, 'duplicate_id')
+
+    const duplicateOpening = completeCandidate()
+    const openingRoom = secondRoomFrom(duplicateOpening)
+    openingRoom.openings[0].id = duplicateOpening.rooms[0].openings[0].id
+    duplicateOpening.rooms.push(openingRoom)
+    expectSemanticCode(duplicateOpening, 'duplicate_id')
+
+    const duplicateHole = completeCandidate()
+    duplicateHole.rooms[0].floor.holes = [
+      {
+        id: 'shaft-1',
+        boundary: [
+          { x: 0.2, y: 0.2 },
+          { x: 0.3, y: 0.2 },
+          { x: 0.25, y: 0.3 },
+        ],
+      },
+    ]
+    const holeRoom = secondRoomFrom(duplicateHole)
+    holeRoom.floor.holes[0].id = 'shaft-1'
+    duplicateHole.rooms.push(holeRoom)
+    expectSemanticCode(duplicateHole, 'duplicate_id')
   })
 
   it('rejects false printed and drawing-unit provenance', () => {
@@ -529,6 +615,20 @@ describe('controlled semantic failures', () => {
       },
     ]
     expectSemanticCode(intersectingHoles, 'invalid_topology')
+
+    const holeWithoutOuter = completeCandidate()
+    holeWithoutOuter.rooms[0].floor.outerBoundary = []
+    holeWithoutOuter.rooms[0].floor.holes = [
+      {
+        id: 'orphan-hole',
+        boundary: [
+          { x: 0.2, y: 0.2 },
+          { x: 0.3, y: 0.2 },
+          { x: 0.25, y: 0.3 },
+        ],
+      },
+    ]
+    expectSemanticCode(holeWithoutOuter, 'invalid_topology')
   })
 
   it('rejects unordered walls and cross-room opening references', () => {
@@ -620,6 +720,35 @@ describe('contract bounds', () => {
         }),
         make: (index) => ({ id: `hole-${index}`, boundary: rectangle.slice(0, 3) }),
       },
+      {
+        maximum: 128,
+        apply: (value) => ({
+          ...candidate,
+          rooms: [
+            {
+              ...candidate.rooms[0],
+              floor: { ...candidate.rooms[0].floor, outerBoundary: value },
+            },
+          ],
+        }),
+        make: (index) => ({ x: index / 1000, y: 0.6 }),
+      },
+      {
+        maximum: 128,
+        apply: (value) => ({
+          ...candidate,
+          rooms: [
+            {
+              ...candidate.rooms[0],
+              floor: {
+                ...candidate.rooms[0].floor,
+                holes: [{ id: 'bounded-hole', boundary: value }],
+              },
+            },
+          ],
+        }),
+        make: (index) => ({ x: index / 1000, y: 0.6 }),
+      },
     ]
 
     for (const { maximum, apply, make } of cases) {
@@ -633,6 +762,32 @@ describe('contract bounds', () => {
         ).success,
       ).toBe(false)
     }
+  })
+
+  it('enforces ring vertex bounds in the final caller schema', () => {
+    const result = finalize(completeCandidate())
+    const vertices = Array.from({ length: 128 }, (_, index) => ({
+      x: index / 1000,
+      y: 0.6,
+    }))
+
+    const outerAtMaximum = structuredClone(result)
+    outerAtMaximum.rooms[0].floor.outerBoundary = vertices
+    expect(roomMeasurementSetSchema.safeParse(outerAtMaximum).success).toBe(true)
+    outerAtMaximum.rooms[0].floor.outerBoundary = [
+      ...vertices,
+      { x: 0.128, y: 0.6 },
+    ]
+    expect(roomMeasurementSetSchema.safeParse(outerAtMaximum).success).toBe(false)
+
+    const holeAtMaximum = structuredClone(result)
+    holeAtMaximum.rooms[0].floor.holes = [{ id: 'bounded-hole', boundary: vertices }]
+    expect(roomMeasurementSetSchema.safeParse(holeAtMaximum).success).toBe(true)
+    holeAtMaximum.rooms[0].floor.holes[0].boundary = [
+      ...vertices,
+      { x: 0.128, y: 0.6 },
+    ]
+    expect(roomMeasurementSetSchema.safeParse(holeAtMaximum).success).toBe(false)
   })
 
   it('enforces top-level, drawing, and room warning bounds', () => {
