@@ -89,6 +89,10 @@ function deferred(): Deferred {
   return { promise, resolve, reject }
 }
 
+async function nextTurn(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve))
+}
+
 function buildHarness(overrides: { artifacts?: Artifact[]; inventory?: unknown } = {}) {
   const pageFiles = ['pdf-page-0001.png', 'pdf-page-0002.png', 'pdf-page-0003.png']
   const inventoryBytes = Buffer.from(
@@ -195,15 +199,13 @@ function buildHarness(overrides: { artifacts?: Artifact[]; inventory?: unknown }
 }
 
 describe('measureRoomsCommand', () => {
-  it('promotes and starts every manifest page before awaiting any room-measurement result', async () => {
+  it('serializes page promotion and room-measurement runs', async () => {
     const harness = buildHarness()
     const pending = measureRoomsCommand.execute(INPUT, harness.ctx)
-    const tick = Promise.withResolvers<void>()
-    setImmediate(tick.resolve)
-    await tick.promise
 
-    expect(harness.promotionCalls).toHaveLength(3)
-    expect(harness.agentRuntime.run).toHaveBeenCalledTimes(3)
+    await nextTurn()
+    expect(harness.promotionCalls).toHaveLength(1)
+    expect(harness.agentRuntime.run).toHaveBeenCalledTimes(1)
     expect(harness.promotionCalls[0]).toEqual({
       commandId: 'agent_orchestrator.artifact.promote',
       input: {
@@ -237,8 +239,17 @@ describe('measureRoomsCommand', () => {
       }),
     )
 
-    for (const wait of harness.waits.values()) wait.resolve({ kind: 'research', data: {} })
+    harness.waits.get('room-measurement:artifact-pdf-page-0001.png')!.resolve({ kind: 'research', data: {} })
+    await nextTurn()
+    expect(harness.promotionCalls).toHaveLength(2)
+    expect(harness.agentRuntime.run).toHaveBeenCalledTimes(2)
 
+    harness.waits.get('room-measurement:artifact-pdf-page-0002.png')!.resolve({ kind: 'research', data: {} })
+    await nextTurn()
+    expect(harness.promotionCalls).toHaveLength(3)
+    expect(harness.agentRuntime.run).toHaveBeenCalledTimes(3)
+
+    harness.waits.get('room-measurement:artifact-pdf-page-0003.png')!.resolve({ kind: 'research', data: {} })
     await expect(pending).resolves.toEqual({
       intakeRunId: RUN_ID,
       totalPages: 3,
@@ -247,14 +258,16 @@ describe('measureRoomsCommand', () => {
     })
   })
 
-  it('settles every valid page even when one room measurement run fails', async () => {
+  it('continues with the next page after one room measurement run fails', async () => {
     const harness = buildHarness()
     const pending = measureRoomsCommand.execute(INPUT, harness.ctx)
-    const tick = Promise.withResolvers<void>()
-    setImmediate(tick.resolve)
-    await tick.promise
+
+    await nextTurn()
     harness.waits.get('room-measurement:artifact-pdf-page-0001.png')!.resolve({ kind: 'research', data: {} })
+    await nextTurn()
     harness.waits.get('room-measurement:artifact-pdf-page-0002.png')!.reject(new Error('provider unavailable'))
+    await nextTurn()
+    expect(harness.agentRuntime.run).toHaveBeenCalledTimes(3)
     harness.waits.get('room-measurement:artifact-pdf-page-0003.png')!.resolve({ kind: 'research', data: {} })
 
     await expect(pending).resolves.toEqual({
