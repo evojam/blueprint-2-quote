@@ -26,6 +26,10 @@ registerWorkflowSafeCommands([
     requiredFeatures: ['customers.deals.manage'],
     labelKey: 'rfq_intake.workflows.commands.measure-rooms',
   },
+  {
+    commandId: 'rfq_intake.analyze-document',
+    requiredFeatures: ['customers.deals.manage'],
+  },
 ])
 
 /**
@@ -80,74 +84,37 @@ const rfqAnalysis = defineWorkflow({
       ],
     },
     {
-      stepId: 'analyze_parallel',
-      stepName: 'Analyze brief and rendered pages',
-      stepType: 'PARALLEL_FORK',
-      description: 'Starts catalog matching and room measurements after PDF intake.',
-      config: { joinStepId: 'analysis_complete' },
-    },
-    {
-      stepId: 'match_catalog',
-      stepName: 'Match the brief to the catalog',
+      stepId: 'analyze_document',
+      stepName: 'Analyze extracted document',
       stepType: 'AUTOMATED',
-      description: 'Runs grouped catalog matching over the extracted brief.',
+      // HACK(hackathon): INVOKE_AGENT → PARALLEL_FORK stalls in the installed
+      // runtime after the intake signal. The app command runs both independent
+      // branches concurrently until the framework continuation is repaired.
+      description: 'Runs catalog matching and page measurements concurrently.',
       activities: [
         {
-          activityId: 'match_requirements',
-          activityName: 'Match requirements',
+          activityId: 'analyze_document_concurrently',
+          activityName: 'Analyze document concurrently',
           activityType: 'UPDATE_ENTITY',
           config: {
-            commandId: 'rfq_intake.requirements.match',
-            input: {
-              tenantId: '{{workflow.tenantId}}',
-              organizationId: '{{workflow.organizationId}}',
-              workflowInstanceId: '{{workflow.instanceId}}',
-              stepId: 'match_catalog',
-            },
-          },
-        },
-      ],
-    },
-    {
-      stepId: 'measure_rooms',
-      stepName: 'Measure rendered PDF pages',
-      stepType: 'AUTOMATED',
-      description: 'Runs strict room measurement extraction for every rendered PDF page.',
-      activities: [
-        {
-          activityId: 'measure_rendered_pages',
-          activityName: 'Measure rendered pages',
-          activityType: 'UPDATE_ENTITY',
-          config: {
-            commandId: 'rfq_intake.measure-rooms',
+            commandId: 'rfq_intake.analyze-document',
             input: {
               tenantId: '{{workflow.tenantId}}',
               organizationId: '{{workflow.organizationId}}',
               workflowInstanceId: '{{workflow.instanceId}}',
               dealId: '{{context.dealId}}',
-              stepId: 'measure_rooms',
+              stepId: 'analyze_document',
             },
           },
         },
       ],
     },
-    {
-      stepId: 'analysis_complete',
-      stepName: 'Analysis complete',
-      stepType: 'PARALLEL_JOIN',
-      description: 'Waits for catalog matching and page measurements.',
-      config: { forkStepId: 'analyze_parallel' },
-    },
     { stepId: 'end', stepName: 'Done', stepType: 'END' },
   ],
   transitions: [
     { transitionId: 't_start', transitionName: 'Start', fromStepId: 'start', toStepId: 'extract_pdf', trigger: 'auto' },
-    { transitionId: 't_analyze', transitionName: 'Analyze', fromStepId: 'extract_pdf', toStepId: 'analyze_parallel', trigger: 'auto' },
-    { transitionId: 't_match', transitionName: 'Match', fromStepId: 'analyze_parallel', toStepId: 'match_catalog', trigger: 'auto' },
-    { transitionId: 't_measure', transitionName: 'Measure', fromStepId: 'analyze_parallel', toStepId: 'measure_rooms', trigger: 'auto' },
-    { transitionId: 't_match_complete', transitionName: 'Catalog complete', fromStepId: 'match_catalog', toStepId: 'analysis_complete', trigger: 'auto' },
-    { transitionId: 't_measure_complete', transitionName: 'Measurements complete', fromStepId: 'measure_rooms', toStepId: 'analysis_complete', trigger: 'auto' },
-    { transitionId: 't_done', transitionName: 'Done', fromStepId: 'analysis_complete', toStepId: 'end', trigger: 'auto' },
+    { transitionId: 't_analyze', transitionName: 'Analyze', fromStepId: 'extract_pdf', toStepId: 'analyze_document', trigger: 'auto' },
+    { transitionId: 't_done', transitionName: 'Done', fromStepId: 'analyze_document', toStepId: 'end', trigger: 'auto' },
   ],
 })
 

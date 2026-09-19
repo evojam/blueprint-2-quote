@@ -137,7 +137,7 @@ describe('rfq_intake inbox action registry', () => {
 })
 
 describe('rfq_intake analysis workflow', () => {
-  it('forks catalog matching and page measurements after PDF intake, then waits for both branch activities', async () => {
+  it('runs catalog matching and page measurements concurrently in an app command after PDF intake', async () => {
     const { workflowsConfig } = await import('../workflows')
     const workflow = workflowsConfig.workflows.find((entry) => entry.workflowId === 'rfq_intake.analysis')
     expect(workflow).toBeDefined()
@@ -147,7 +147,6 @@ describe('rfq_intake analysis workflow', () => {
       steps: Array<{
         stepId: string
         stepType: string
-        config?: Record<string, unknown>
         activities?: Array<{ activityType: string; async?: boolean; config: Record<string, unknown> }>
       }>
       transitions: Array<{ fromStepId: string; toStepId: string }>
@@ -155,28 +154,9 @@ describe('rfq_intake analysis workflow', () => {
     }
 
     expect(definition.interpolation).toBe('strict')
-    expect(definition.steps.map((step) => step.stepType)).toEqual([
-      'START',
-      'AUTOMATED',
-      'PARALLEL_FORK',
-      'AUTOMATED',
-      'AUTOMATED',
-      'PARALLEL_JOIN',
-      'END',
-    ])
-    expect(definition.steps.find((step) => step.stepId === 'analyze_parallel')?.config).toEqual({
-      joinStepId: 'analysis_complete',
-    })
-    expect(definition.steps.find((step) => step.stepId === 'analysis_complete')?.config).toEqual({
-      forkStepId: 'analyze_parallel',
-    })
-
+    expect(definition.steps.map((step) => step.stepType)).toEqual(['START', 'AUTOMATED', 'AUTOMATED', 'END'])
     const activities = definition.steps.flatMap((step) => step.activities ?? [])
-    expect(activities.map((activity) => activity.activityType)).toEqual([
-      'INVOKE_AGENT',
-      'UPDATE_ENTITY',
-      'UPDATE_ENTITY',
-    ])
+    expect(activities.map((activity) => activity.activityType)).toEqual(['INVOKE_AGENT', 'UPDATE_ENTITY'])
     expect(activities.every((activity) => activity.async !== true)).toBe(true)
     expect(activities[0]!.config).toMatchObject({
       agentId: 'property_documents.pdf_intake',
@@ -186,34 +166,20 @@ describe('rfq_intake analysis workflow', () => {
     })
     expect(activities[1]).toMatchObject({
       config: {
-        input: {
-          tenantId: '{{workflow.tenantId}}',
-          organizationId: '{{workflow.organizationId}}',
-          workflowInstanceId: '{{workflow.instanceId}}',
-          stepId: 'match_catalog',
-        },
-      },
-    })
-    expect(activities[2]).toMatchObject({
-      config: {
-        commandId: 'rfq_intake.measure-rooms',
+        commandId: 'rfq_intake.analyze-document',
         input: {
           tenantId: '{{workflow.tenantId}}',
           organizationId: '{{workflow.organizationId}}',
           workflowInstanceId: '{{workflow.instanceId}}',
           dealId: '{{context.dealId}}',
-          stepId: 'measure_rooms',
+          stepId: 'analyze_document',
         },
       },
     })
     expect(definition.transitions).toEqual([
       { transitionId: 't_start', transitionName: 'Start', fromStepId: 'start', toStepId: 'extract_pdf', trigger: 'auto' },
-      { transitionId: 't_analyze', transitionName: 'Analyze', fromStepId: 'extract_pdf', toStepId: 'analyze_parallel', trigger: 'auto' },
-      { transitionId: 't_match', transitionName: 'Match', fromStepId: 'analyze_parallel', toStepId: 'match_catalog', trigger: 'auto' },
-      { transitionId: 't_measure', transitionName: 'Measure', fromStepId: 'analyze_parallel', toStepId: 'measure_rooms', trigger: 'auto' },
-      { transitionId: 't_match_complete', transitionName: 'Catalog complete', fromStepId: 'match_catalog', toStepId: 'analysis_complete', trigger: 'auto' },
-      { transitionId: 't_measure_complete', transitionName: 'Measurements complete', fromStepId: 'measure_rooms', toStepId: 'analysis_complete', trigger: 'auto' },
-      { transitionId: 't_done', transitionName: 'Done', fromStepId: 'analysis_complete', toStepId: 'end', trigger: 'auto' },
+      { transitionId: 't_analyze', transitionName: 'Analyze', fromStepId: 'extract_pdf', toStepId: 'analyze_document', trigger: 'auto' },
+      { transitionId: 't_done', transitionName: 'Done', fromStepId: 'analyze_document', toStepId: 'end', trigger: 'auto' },
     ])
     expect(definition.triggers ?? []).toEqual([])
   })
