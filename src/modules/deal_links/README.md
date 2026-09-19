@@ -8,18 +8,20 @@ Links a CRM deal to the sales quote or order produced for it.
 |---|---|---|
 | Entity | `data/entities.ts` | `deal_document_links`. No cross-module ORM relation, no unique index on `deal_id`. |
 | Command | `commands/document-links.ts` | `deal_links.document_links.create`. The only write path for a hand-created link. Commits outside the caller's transaction — call it AFTER yours commits. |
-| Route | `api/document-links/route.ts` | `GET` (filter by `dealId`, newest first) and `POST`. |
-| Deal widget | `widgets/injection/deal-documents/` | The tab on the deal detail page: lists a deal's linked documents and is the only place a link is created by hand. |
+| Route | `api/document-links/route.ts` | `GET` (filter by `dealId`, by `documentId`, or by both — both optional, newest first) and `POST`. |
+| Deal widget | `widgets/injection/deal-documents/` | The tab on the deal detail page: lists a deal's linked documents and is one of two places a link is created by hand. |
 | Document widget | `widgets/injection/document-deals/` | The Deals tab on the sales document detail page (quote and order): lists the deals linked to that document and links another. |
 | Convert interceptor | `commands/interceptors.ts` | Carries the link across quote → order conversion. |
 
 ## Creating a link by hand
 
-The deal detail tab is the only surface that creates a link. There is no standalone
-backoffice page any more — the tab alone covers it, and a deal may carry several
-documents. The document picker offers quotes and orders in a single field whose value is
-encoded `kind:uuid` (`lib/document-ref.ts`), because a dependent picker driven by a
-separate "kind" field would need a hand-rolled custom field.
+The deal detail tab and the sales document detail tab are the only two surfaces that
+create a link by hand; both call the same `deal_links.document_links.create` command
+through the same route. There is no standalone backoffice page any more — the deal tab
+covers the deal side, and a deal may carry several documents. The document picker on the
+deal tab offers quotes and orders in a single field whose value is encoded `kind:uuid`
+(`lib/document-ref.ts`), because a dependent picker driven by a separate "kind" field
+would need a hand-rolled custom field.
 
 Row labels in the tab come from one batched `?ids=` request per source
 (`lib/link-labels.ts`); `makeCrudRoute` supports that param on every route involved, so
@@ -41,8 +43,9 @@ carry several deals, the same way a deal may carry several documents — neither
 - **No delete.** Neither the module nor the tab can remove a link. A wrong row
   needs hand-written SQL. Deliberate, see
   `.ai/specs/2026-09-19-manual-deal-document-linking.md`.
-- **No filtering or sorting** on the list route: it only understands a
-  `dealId` filter and a `created_at` sort.
+- **No filtering or sorting beyond deal/document identity** on the list route: it
+  understands `dealId` and `documentId` filters (each optional, independently or
+  together) and a `created_at` sort, and nothing else.
 - **Encrypted tenants** cannot search deals in the picker; the deals route
   collapses `search` to no matches when tenant data encryption is on.
 - **Ids are validated, not verified.** `dealId`/`documentId` on the create
