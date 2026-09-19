@@ -4,9 +4,11 @@ import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { DealDocumentLink } from '../../data/entities'
 import { documentLinkCreateSchema } from '../../commands/document-links'
 import { documentLinksRouteAccess, DOCUMENT_LINK_ENTITY_ID } from '../../lib/route-access'
+import { buildDocumentLinkFilters } from '../../lib/document-links-filters'
 
 const querySchema = z.object({
   dealId: z.string().uuid().optional(),
+  documentId: z.string().uuid().optional(),
   page: z.coerce.number().min(1).default(1),
   pageSize: z.coerce.number().min(1).max(100).default(50),
   sortField: z.string().optional().default('created_at'),
@@ -56,11 +58,7 @@ export const { metadata, GET, POST } = makeCrudRoute({
     // request omits `sortField`/`sortDir`. This `defaultSort` is what actually
     // makes the list "newest first" as documented in `openApi` below.
     defaultSort: { field: 'created_at', dir: 'desc' },
-    buildFilters: async (q: Query) => {
-      const filters: Record<string, unknown> = {}
-      if (q.dealId) filters.deal_id = q.dealId
-      return filters
-    },
+    buildFilters: async (q: Query) => buildDocumentLinkFilters(q),
   },
   actions: {
     create: {
@@ -79,7 +77,8 @@ export const openApi: OpenApiRouteDoc = {
   methods: {
     GET: {
       summary: 'List the sales documents linked to a deal',
-      description: 'Returns the quote and order links recorded for one deal, newest first.',
+      description:
+        'Returns the links recorded for one deal, for one sales document, or for one deal-document pair, newest first. Supplying neither filter lists every link in scope.',
       tags: ['Deal links'],
       query: querySchema,
       responses: [{ status: 200, description: 'Links for the deal.', schema: listResponseSchema }],
