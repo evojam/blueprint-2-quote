@@ -43,17 +43,6 @@ const measureRoomsInputSchema = workflowCommandInputSchema
   })
   .strict()
 
-const analyzeDocumentInputSchema = workflowCommandInputSchema
-  .extend({
-    dealId: z.string().uuid(),
-    stepId: z.literal('analyze_document'),
-  })
-  .strict()
-export type AnalyzeDocumentInput = z.infer<typeof analyzeDocumentInputSchema>
-export type DocumentAnalysisResult = {
-  catalog: GroupedMatcherResult
-  measurements: RoomMeasurementFanoutResult
-}
 export type AnalysisInput = z.infer<typeof analysisInputSchema>
 export type MeasureRoomsInput = z.infer<typeof measureRoomsInputSchema>
 export type PdfIntakeBrief = {
@@ -66,7 +55,7 @@ export type RoomMeasurementFanoutResult = {
   succeeded: number
   failed: Array<{ fileName: string; reason: string }>
 }
-type WorkflowCommandInput = AnalysisInput | MeasureRoomsInput | AnalyzeDocumentInput
+type WorkflowCommandInput = AnalysisInput | MeasureRoomsInput
 type GroupedMatcherResult = z.infer<typeof catalogMatcherGroupedResultSchema>
 type CommandCtx = Parameters<CommandHandler<WorkflowCommandInput, unknown>['execute']>[1]
 type AgentRuntime = {
@@ -475,41 +464,8 @@ const measureRoomsCommand: CommandHandler<MeasureRoomsInput, RoomMeasurementFano
   },
 }
 
-const analyzeDocumentCommand: CommandHandler<AnalyzeDocumentInput, DocumentAnalysisResult> = {
-  id: 'rfq_intake.analyze-document',
-  execute: async (rawInput, ctx) => {
-    const input = analyzeDocumentInputSchema.parse(rawInput)
-    const [catalog, measurements] = await Promise.allSettled([
-      runCommand<AnalysisInput, GroupedMatcherResult>(ctx, 'rfq_intake.requirements.match', {
-        tenantId: input.tenantId,
-        organizationId: input.organizationId,
-        workflowInstanceId: input.workflowInstanceId,
-        stepId: 'match_catalog',
-      }),
-      runCommand<MeasureRoomsInput, RoomMeasurementFanoutResult>(ctx, 'rfq_intake.measure-rooms', {
-        tenantId: input.tenantId,
-        organizationId: input.organizationId,
-        workflowInstanceId: input.workflowInstanceId,
-        dealId: input.dealId,
-        stepId: 'measure_rooms',
-      }),
-    ])
-    if (catalog.status === 'rejected' || measurements.status === 'rejected') {
-      const failures = [catalog, measurements]
-        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-        .map((result) => (result.reason instanceof Error ? result.reason.message : 'command failed'))
-      throw new Error(`[internal] RFQ document analysis failed: ${failures.join('; ')}`)
-    }
-    return {
-      catalog: catalog.value,
-      measurements: measurements.value,
-    }
-  },
-}
-
-registerCommand(analyzeDocumentCommand)
 
 registerCommand(matchRequirementsCommand)
 registerCommand(measureRoomsCommand)
 
-export { analyzeDocumentCommand, matchRequirementsCommand, measureRoomsCommand }
+export { matchRequirementsCommand, measureRoomsCommand }
