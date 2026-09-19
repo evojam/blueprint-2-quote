@@ -199,6 +199,38 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@aws-sdk/checksums@npm:^3.1001.0":
+  version: 3.1001.0
+  resolution: "@aws-sdk/checksums@npm:3.1001.0"
+  dependencies:
+    "@aws-sdk/core": "npm:^3.978.0"
+    "@aws-sdk/types": "npm:^3.974.5"
+    "@smithy/core": "npm:^3.33.3"
+    "@smithy/types": "npm:^4.17.2"
+    tslib: "npm:^2.6.2"
+  checksum: 10c0/daa0c0011f72cb26bf797e08704aa7d88b4f1f77b6d8c23336eac3ee0efd0ad401074dd07fa5174132b7edc7ab318269f2a71d8c87dbc343ddcbe23a802540d6
+  languageName: node
+  linkType: hard
+
+"@aws-sdk/client-s3@npm:^3.1085.0":
+  version: 3.1131.0
+  resolution: "@aws-sdk/client-s3@npm:3.1131.0"
+  dependencies:
+    "@aws-sdk/checksums": "npm:^3.1001.0"
+    "@aws-sdk/core": "npm:^3.978.0"
+    "@aws-sdk/credential-provider-node": "npm:^3.972.83"
+    "@aws-sdk/middleware-sdk-s3": "npm:^3.972.76"
+    "@aws-sdk/signature-v4-multi-region": "npm:^3.996.46"
+    "@aws-sdk/types": "npm:^3.974.5"
+    "@smithy/core": "npm:^3.33.3"
+    "@smithy/fetch-http-handler": "npm:^5.7.2"
+    "@smithy/node-http-handler": "npm:^4.11.3"
+    "@smithy/types": "npm:^4.17.2"
+    tslib: "npm:^2.6.2"
+  checksum: 10c0/cc2f330f39d16183f2c4ce3380e19bee73680a1f80bb426c9b63ba945066f2b001fecfa4d5e48d4abc930a3bc2c7bbe1d25cbbe71e9c0ed0aab3262ba7bf2a9c
+  languageName: node
+  linkType: hard
+
 "@aws-sdk/client-sesv2@npm:^3.946.0":
   version: 3.1131.0
   resolution: "@aws-sdk/client-sesv2@npm:3.1131.0"
@@ -356,6 +388,20 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@aws-sdk/middleware-sdk-s3@npm:^3.972.76":
+  version: 3.972.76
+  resolution: "@aws-sdk/middleware-sdk-s3@npm:3.972.76"
+  dependencies:
+    "@aws-sdk/core": "npm:^3.978.0"
+    "@aws-sdk/signature-v4-multi-region": "npm:^3.996.46"
+    "@aws-sdk/types": "npm:^3.974.5"
+    "@smithy/core": "npm:^3.33.3"
+    "@smithy/types": "npm:^4.17.2"
+    tslib: "npm:^2.6.2"
+  checksum: 10c0/7baaae349411e77897b3ca49670f564d085a1e8744230578127c3b010cb35ce019601fd2c4610e0ce0f6819b53fda9d3ec78d3d84b9408c9da6cbe42c9c83e23
+  languageName: node
+  linkType: hard
+
 "@aws-sdk/nested-clients@npm:^3.997.45":
   version: 3.997.45
   resolution: "@aws-sdk/nested-clients@npm:3.997.45"
@@ -369,6 +415,20 @@ __metadata:
     "@smithy/types": "npm:^4.17.2"
     tslib: "npm:^2.6.2"
   checksum: 10c0/ef65f970b8e0aa55bf7a837fefbf3a042f247dc4fd7291bc0d64c5115c825e2785d8684a62e97ea7f519ed9a4251b922fbe84e6278dd77d45f1d7cf740dd525d
+  languageName: node
+  linkType: hard
+
+"@aws-sdk/s3-request-presigner@npm:^3.1085.0":
+  version: 3.1131.0
+  resolution: "@aws-sdk/s3-request-presigner@npm:3.1131.0"
+  dependencies:
+    "@aws-sdk/core": "npm:^3.978.0"
+    "@aws-sdk/signature-v4-multi-region": "npm:^3.996.46"
+    "@aws-sdk/types": "npm:^3.974.5"
+    "@smithy/core": "npm:^3.33.3"
+    "@smithy/types": "npm:^4.17.2"
+    tslib: "npm:^2.6.2"
+  checksum: 10c0/c50d06a3c437c8c818ea3a11330b1d9bdce6394be122f6023b9e772d8cf7ec2521ff84868d5a2db298c7836b323802269cce0fe8408f34fabf9cf16fe891d35a
   languageName: node
   linkType: hard
 
@@ -4405,6 +4465,21 @@ __metadata:
     sanitize-html: "npm:2.17.5"
     undici: "npm:^8.9.0"
   checksum: 10c0/45126e598a94991044ba5a963dbf1603b99492f3bd008994256a638b6acd43a2c9c23ebbf4dd50be5d70ce59d85ce83c201eae6bed065407fec0455408c05a29
+  languageName: node
+  linkType: hard
+
+"@open-mercato/storage-s3@npm:0.8.0":
+  version: 0.8.0
+  resolution: "@open-mercato/storage-s3@npm:0.8.0"
+  dependencies:
+    "@aws-sdk/client-s3": "npm:^3.1085.0"
+    "@aws-sdk/s3-request-presigner": "npm:^3.1085.0"
+    "@open-mercato/core": "npm:0.8.0"
+    "@open-mercato/queue": "npm:0.8.0"
+  peerDependencies:
+    "@mikro-orm/postgresql": ^6.6.10
+    "@open-mercato/shared": 0.8.0
+  checksum: 10c0/3e4348d01244b29b93cfbe599f7abe97157a27c2e72a1a09d3e6d8f59fdb10024260aba4c9ab17d04761f727e7b982d0ba649ef1aadd52da14a18ac14f486aa8
   languageName: node
   linkType: hard
 
@@ -12296,6 +12371,7 @@ __metadata:
     "@open-mercato/scheduler": "npm:0.8.0"
     "@open-mercato/search": "npm:0.8.0"
     "@open-mercato/shared": "npm:0.8.0"
+    "@open-mercato/storage-s3": "npm:0.8.0"
     "@open-mercato/sync-akeneo": "npm:0.8.0"
     "@open-mercato/telemetry": "npm:0.8.0"
     "@open-mercato/tillio": "npm:0.8.0"

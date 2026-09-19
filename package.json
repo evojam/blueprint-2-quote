@@ -80,6 +80,7 @@
     "@open-mercato/scheduler": "0.8.0",
     "@open-mercato/search": "0.8.0",
     "@open-mercato/shared": "0.8.0",
+    "@open-mercato/storage-s3": "0.8.0",
     "@open-mercato/sync-akeneo": "0.8.0",
     "@open-mercato/telemetry": "0.8.0",
     "@open-mercato/tillio": "0.8.0",
