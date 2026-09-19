@@ -294,7 +294,7 @@ async function backfillProductVat(
   const { productId, handle, currentTaxRateId, vatRateId, dryRun } = options
 
   if (dryRun) {
-    if (currentTaxRateId !== vatRateId) {
+    if (vatRateId === null || currentTaxRateId !== vatRateId) {
       console.log(`[dry-run] would set tax rate "${VAT_8_CODE}" on product "${handle}" and its variants`)
       counters.vatBackfilled += 1
     }
@@ -339,11 +339,10 @@ async function seedProducts(
     priceKindId: string
     vatRateId: string | null
     dryRun: boolean
-    backfillVat: boolean
   },
   counters: SeedCounters,
 ): Promise<void> {
-  const { categoryIdBySlug, priceKindId, vatRateId, dryRun, backfillVat } = options
+  const { categoryIdBySlug, priceKindId, vatRateId, dryRun } = options
 
   for (const productSeed of RENOVATION_SERVICE_CATALOG) {
     const existingProduct = await em.findOne(CatalogProduct, {
@@ -356,22 +355,20 @@ async function seedProducts(
     let productId = existingProduct?.id ?? null
 
     if (existingProduct) {
-      if (backfillVat) {
-        await backfillProductVat(
-          em,
-          commandBus,
-          ctx,
-          scope,
-          {
-            productId: existingProduct.id,
-            handle: productSeed.handle,
-            currentTaxRateId: existingProduct.taxRateId ?? null,
-            vatRateId,
-            dryRun,
-          },
-          counters,
-        )
-      }
+      await backfillProductVat(
+        em,
+        commandBus,
+        ctx,
+        scope,
+        {
+          productId: existingProduct.id,
+          handle: productSeed.handle,
+          currentTaxRateId: existingProduct.taxRateId ?? null,
+          vatRateId,
+          dryRun,
+        },
+        counters,
+      )
     } else if (dryRun) {
       console.log(`[dry-run] would create product "${productSeed.handle}" (category "${productSeed.categorySlug}")`)
       counters.productsCreated += 1
@@ -468,7 +465,7 @@ const seedRenovationCatalog: ModuleCli = {
         commandBus,
         ctx,
         scope,
-        { categoryIdBySlug, priceKindId, vatRateId, dryRun: args.dryRun, backfillVat: args.backfillVat },
+        { categoryIdBySlug, priceKindId, vatRateId, dryRun: args.dryRun },
         counters,
       )
 

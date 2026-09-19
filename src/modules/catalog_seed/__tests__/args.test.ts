@@ -9,15 +9,13 @@ describe('parseSeedArgs', () => {
     expect(parseSeedArgs(['--org', ORG_ID])).toEqual({
       organizationId: ORG_ID,
       dryRun: false,
-      backfillVat: false,
     })
   })
 
-  it('reads the organization id from an inline value and both flags', () => {
-    expect(parseSeedArgs([`--org=${ORG_ID}`, '--dry-run', '--backfill-vat'])).toEqual({
+  it('reads the organization id from an inline value together with the dry-run flag', () => {
+    expect(parseSeedArgs([`--org=${ORG_ID}`, '--dry-run'])).toEqual({
       organizationId: ORG_ID,
       dryRun: true,
-      backfillVat: true,
     })
   })
 
