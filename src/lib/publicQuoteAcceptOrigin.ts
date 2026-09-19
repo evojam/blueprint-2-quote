@@ -1,5 +1,4 @@
 import type { ApiRouteOverridesMap } from '@open-mercato/shared/modules/overrides'
-import { getAppBaseUrl } from '@open-mercato/shared/lib/url'
 
 /**
  * Restores the public-quote acceptance endpoint behind a TLS-terminating proxy.
@@ -23,6 +22,12 @@ import { getAppBaseUrl } from '@open-mercato/shared/lib/url'
  * "Quote not found" — meaning the guard passed — only when `Origin` is exactly
  * `https://localhost:3000`. Full evidence: `.ai/notes/quote-accept-failure-leads.md`.
  *
+ * No `import 'server-only'` guard here, deliberately: the package is not a direct
+ * dependency of this app, and adding one is an Ask First decision under AGENTS.md. The
+ * import graph carries the guarantee instead — this module is reachable only from
+ * `bootstrap-common.ts`, and a regression shows up as the same Turbopack build failure
+ * described below rather than silently.
+ *
  * Registered through `applyApiRouteOverrides` in `src/bootstrap-common.ts`, NOT through
  * `entry.overrides.routes.api` in `src/modules.ts`: `ClientBootstrap.tsx:66` imports
  * `@/modules` in the browser, so naming this handler there pulls the installed sales
@@ -38,10 +43,9 @@ import { getAppBaseUrl } from '@open-mercato/shared/lib/url'
  *
  * This does NOT weaken the guard. It restores it: the check now compares the browser
  * origin against the application's configured public origin instead of against a listen
- * address no browser can ever send. `getAppBaseUrl` reads `NEXT_PUBLIC_APP_URL` then
- * `APP_URL` — the same single source of truth that `sales/api/quotes/send` already uses
- * to build the link inside the customer's email — and only then falls back to
- * reconstructing the origin from `X-Forwarded-*`.
+ * address no browser can ever send. The expected origin comes from `NEXT_PUBLIC_APP_URL`
+ * or `APP_URL` — the same single source of truth that `sales/api/quotes/send` already
+ * uses to build the link inside the customer's email.
  */
 
 /**
@@ -59,12 +63,30 @@ import { getAppBaseUrl } from '@open-mercato/shared/lib/url'
 export async function withPublicOrigin(req: Request): Promise<Request> {
   const incoming = new URL(req.url)
 
+  // Read the environment directly rather than through `getAppBaseUrl`, and refuse to
+  // proceed without it.
+  //
+  // `getAppBaseUrl` falls back to `resolveRequestOrigin(req)`, which takes its host from
+  // `x-forwarded-host` or `host` — both attacker-controlled. Using it here was a real
+  // CSRF bypass, reproduced against the installed guard: with neither variable set, a
+  // request carrying `Origin: https://evil.example` and `X-Forwarded-Host: evil.example`
+  // was rebased onto `https://evil.example`, so the guard compared the attacker's origin
+  // against the attacker's own host and returned `null` — where the unwrapped request
+  // was correctly rejected as `cross-origin`. A wrapper must never leave a guard weaker
+  // than it found it.
+  //
+  // With no configured origin there is nothing trustworthy to compare against, so the
+  // request passes through untouched and the installed guard keeps its own verdict. That
+  // reproduces today's behaviour instead of adding a new hole. `APP_URL` is required in
+  // production anyway (`shared/lib/url.ts` throws without it on security e-mail links).
+  const configuredAppUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL
+  if (!configuredAppUrl) return req
+
   let publicOrigin: string
   try {
-    publicOrigin = new URL(getAppBaseUrl(req)).origin
+    publicOrigin = new URL(configuredAppUrl).origin
   } catch {
     // A malformed APP_URL must not take the endpoint down on top of the origin bug.
-    // Falling through unchanged reproduces today's behaviour rather than a new failure.
     return req
   }
 

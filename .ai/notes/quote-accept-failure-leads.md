@@ -352,7 +352,7 @@ pomiarami i diffem. Hosty w zgłoszeniu zanonimizowane do `demo.example.com`, bo
 |---|---|
 | `src/lib/publicQuoteAcceptOrigin.ts` | `withPublicOrigin()` przepisuje URL żądania na publiczny origin z `getAppBaseUrl`; `acceptPublicQuote()` opakowuje installed `POST`; `PUBLIC_QUOTE_ACCEPT_ROUTE_OVERRIDE` jest jedynym właścicielem klucza |
 | `src/bootstrap-common.ts` | `applyApiRouteOverrides(PUBLIC_QUOTE_ACCEPT_ROUTE_OVERRIDE)` tuż po `applyModuleOverridesFromEnabledModules` |
-| `src/lib/__tests__/publicQuoteAcceptOrigin.test.ts` | 6 przypadków: 5 na zachowanie, 1 na sam klucz |
+| `src/lib/__tests__/publicQuoteAcceptOrigin.test.ts` | 10 przypadków: 5 na zachowanie, 3 przez prawdziwy installed guard, 1 na klucz, 1 na wpięcie w bootstrap |
 
 Mechanizm potwierdzony w źródłach `@open-mercato/shared@0.8.0`:
 
@@ -409,13 +409,38 @@ Node 24.21.0 przez nvm, yarn 4.17.1 przez corepack.
 | `yarn generate` | OK |
 | `yarn typecheck` | exit 0 |
 | `yarn lint` | exit 0 (9 ostrzeżeń, wszystkie zastane, żadne w nowych plikach) |
-| `yarn test` | 26 suite, **262 testy**, wszystkie zielone |
+| `yarn test` | 26 suite, **266 testów**, wszystkie zielone |
 | `yarn build` | exit 0 |
 
 Pominięte świadomie: `yarn ds:check` i `yarn i18n:check-hardcoded` — diff nie dotyka
 renderowanego UI ani stringów użytkownika.
 
-### Oba testy widziane na czerwono
+### Bypass CSRF, który sam wprowadziłem
+
+Pierwsza wersja wrappera brała origin z `getAppBaseUrl(req)`. Ta funkcja ma ostatni
+fallback `resolveRequestOrigin(req)`, który czyta host z **`x-forwarded-host` albo `host`** —
+czyli z nagłówków kontrolowanych przez atakującego. Mój komentarz w kodzie opisywał ten
+fallback jako zaletę.
+
+Zmierzone przeciw prawdziwemu installed guardowi, bez `APP_URL` i `NEXT_PUBLIC_APP_URL`,
+z `Origin: https://evil.example` i `X-Forwarded-Host: evil.example`:
+
+```
+WRAPPED URL           = https://evil.example/api/sales/quotes/accept
+GUARD VERDICT         = null                      <-- przepuszczony
+BASELINE (bez wrappera) = {"reason":"cross-origin", ...}   <-- odrzucony
+```
+
+Wrapper zamieniał guard fail-closed w przepuszczalny. Poprawka: czytać `NEXT_PUBLIC_APP_URL`
+/ `APP_URL` wprost z env i **przepuszczać żądanie bez zmian**, gdy żadnego nie ma — wtedy
+guard zachowuje swój własny werdykt.
+
+Skala, uczciwie: ten endpoint ma `requireAuth: false` i autoryzuje sekretnym tokenem w
+ciele, więc CSRF jest tu defence-in-depth, nie granicą uwierzytelnienia. Na demo obie
+zmienne są ustawione, więc nie było wykorzystywalne. Ale wrapper nie ma prawa zostawić
+guardu słabszym, niż go zastał.
+
+### Trzy testy widziane na czerwono
 
 Nie „powinny łapać", tylko złapały:
 
@@ -426,6 +451,10 @@ Nie „powinny łapać", tylko złapały:
 2. **Klucz.** Podmiana klucza na `POST /api/sales/quotes/accept-renamed-upstream`
    → przypadek na czerwono. To bramka na cichą śmierć override'u: `applyApiOverridesToManifests`
    na nietrafiony klucz tylko loguje ostrzeżenie i idzie dalej.
+3. **Bezpieczeństwo i wpięcie.** Przywrócenie fallbacku na `x-forwarded-host` czerwieni
+   przypadek ze sfałszowanym hostem; usunięcie `applyApiRouteOverrides(...)` z
+   `bootstrap-common.ts` czerwieni bramkę wpięcia. Bez tej drugiej override może umrzeć
+   po cichu, bo wszystkie pozostałe testy wołają helper bezpośrednio.
 
 Pozytywne potwierdzenie samego klucza: `.mercato/generated/openapi.generated.json` zawiera
 `/api/sales/quotes/accept` z metodą `post`, a w logu builda nie ma ani jednego wystąpienia

@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it } from '@jest/globals'
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { validateSameOriginMutationRequest } from '@open-mercato/core/modules/sales/api/quotes/accept/originGuard'
+
 import { PUBLIC_QUOTE_ACCEPT_ROUTE_OVERRIDE, withPublicOrigin } from '../publicQuoteAcceptOrigin'
 
 /**
@@ -103,6 +105,70 @@ describe('withPublicOrigin', () => {
   })
 })
 
+/**
+ * The security property, asserted against the REAL installed guard rather than a
+ * restatement of it.
+ *
+ * The cases above only prove the URL was re-based. They say nothing about whether the
+ * guard then accepts or rejects, and asserting only the accept direction is exactly what
+ * let a bypass ship: an earlier version resolved the origin through `getAppBaseUrl`,
+ * whose last fallback reads the attacker-controlled `x-forwarded-host`. With no
+ * `APP_URL` configured, a request naming `evil.example` in both `Origin` and
+ * `X-Forwarded-Host` was rebased onto `https://evil.example` and the guard returned
+ * `null` — while the unwrapped request was correctly rejected as `cross-origin`.
+ */
+describe('withPublicOrigin, against the installed origin guard', () => {
+  const previous = {
+    nextPublic: process.env.NEXT_PUBLIC_APP_URL,
+    appUrl: process.env.APP_URL,
+  }
+
+  afterEach(() => {
+    process.env.NEXT_PUBLIC_APP_URL = previous.nextPublic
+    process.env.APP_URL = previous.appUrl
+  })
+
+  it('accepts the real browser origin', async () => {
+    process.env.NEXT_PUBLIC_APP_URL = PUBLIC_ORIGIN
+    const req = new Request(LISTEN_URL, {
+      method: 'POST',
+      headers: { origin: PUBLIC_ORIGIN },
+      body: '{}',
+    })
+
+    expect(validateSameOriginMutationRequest(await withPublicOrigin(req))).toBeNull()
+  })
+
+  it('still rejects a foreign origin', async () => {
+    process.env.NEXT_PUBLIC_APP_URL = PUBLIC_ORIGIN
+    const req = new Request(LISTEN_URL, {
+      method: 'POST',
+      headers: { origin: 'https://evil.example' },
+      body: '{}',
+    })
+
+    expect(validateSameOriginMutationRequest(await withPublicOrigin(req))).not.toBeNull()
+  })
+
+  it('rejects a spoofed X-Forwarded-Host when no app origin is configured', async () => {
+    delete process.env.NEXT_PUBLIC_APP_URL
+    delete process.env.APP_URL
+    const req = new Request(LISTEN_URL, {
+      method: 'POST',
+      headers: {
+        origin: 'https://evil.example',
+        'x-forwarded-host': 'evil.example',
+        'x-forwarded-proto': 'https',
+      },
+      body: '{}',
+    })
+
+    // The wrapper must hand the guard a request it still refuses. Reproduced as a real
+    // bypass before this assertion existed.
+    expect(validateSameOriginMutationRequest(await withPublicOrigin(req))).not.toBeNull()
+  })
+})
+
 describe('PUBLIC_QUOTE_ACCEPT_ROUTE_OVERRIDE', () => {
   /**
    * The gate for the override KEY, as opposed to the handler behaviour above.
@@ -125,4 +191,18 @@ describe('PUBLIC_QUOTE_ACCEPT_ROUTE_OVERRIDE', () => {
       expect(openApi.paths[routePath!]![method!.toLowerCase()]).toBeDefined()
     },
   )
+})
+
+describe('bootstrap wiring', () => {
+  /**
+   * Deleting the `applyApiRouteOverrides` call leaves every other case in this file
+   * green, because they all exercise the helper directly. Then the override is never
+   * applied and every customer is back to 403. Same guard shape as
+   * `src/modules/rfq_intake/__tests__/rfq-intake-wiring.test.ts:241`.
+   */
+  it('applies the override from bootstrap-common', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/bootstrap-common.ts'), 'utf8')
+
+    expect(source).toContain('applyApiRouteOverrides(PUBLIC_QUOTE_ACCEPT_ROUTE_OVERRIDE)')
+  })
 })
