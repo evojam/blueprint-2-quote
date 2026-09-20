@@ -13,7 +13,6 @@ function resolveBaseURL(options: LlmCreateModelOptions): string {
   const configuredBaseURL = process.env.LITELLM_BASE_URL?.trim()
   return configuredBaseURL || DEFAULT_LITELLM_BASE_URL
 }
-
 export function createLiteLlmChatProvider(baseProvider: LlmProvider): LlmProvider {
   if (baseProvider.id !== LITELLM_PROVIDER_ID) {
     throw new Error(`[property_documents] expected provider "${LITELLM_PROVIDER_ID}"`)
@@ -26,7 +25,9 @@ export function createLiteLlmChatProvider(baseProvider: LlmProvider): LlmProvide
         apiKey: options.apiKey,
         baseURL: resolveBaseURL(options),
       })
-      return openai.chat(options.modelId)
+      return options.modelId === 'gpt-5.6-sol'
+        ? openai.responses(options.modelId)
+        : openai.chat(options.modelId)
     },
   }
 }

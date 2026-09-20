@@ -5,12 +5,16 @@ const mockChat = jest.fn((modelId: string) => ({
   modelId,
   provider: 'openai.chat',
 }))
+const mockResponses = jest.fn((modelId: string) => ({
+  modelId,
+  provider: 'openai.responses',
+}))
 const mockOpenAI = Object.assign(
   jest.fn((modelId: string) => ({
     modelId,
-    provider: 'openai.responses',
+    provider: 'openai.default',
   })),
-  { chat: mockChat },
+  { chat: mockChat, responses: mockResponses },
 )
 const mockCreateOpenAI = jest.fn((options: unknown) => {
   void options
@@ -74,6 +78,31 @@ describe('LiteLLM chat compatibility provider', () => {
       modelId: 'claude-opus-4-7',
       provider: 'openai.chat',
     })
+  })
+
+  it('uses Responses for GPT Sol tool calls', () => {
+    const baseProvider: LlmProvider = {
+      id: 'litellm',
+      name: 'LiteLLM',
+      envKeys: ['LITELLM_API_KEY'],
+      defaultModel: 'gpt-4o-mini',
+      defaultModels: [],
+      usesVendorPrefixedModelIds: true,
+      isConfigured: () => true,
+      resolveApiKey: () => 'test-key',
+      getConfiguredEnvKey: () => 'LITELLM_API_KEY',
+      createModel: () => ({ provider: 'openai.responses' }),
+    }
+
+    const model = createLiteLlmChatProvider(baseProvider).createModel({
+      apiKey: 'test-key',
+      modelId: 'gpt-5.6-sol',
+      baseURL: 'https://gateway.example/v1',
+    }) as { modelId: string; provider: string }
+
+    expect(mockResponses).toHaveBeenCalledWith('gpt-5.6-sol')
+    expect(mockChat).not.toHaveBeenCalled()
+    expect(model).toMatchObject({ modelId: 'gpt-5.6-sol', provider: 'openai.responses' })
   })
 
   it('uses the LiteLLM default URL when the environment value is blank', () => {

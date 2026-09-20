@@ -54,6 +54,15 @@ PROVIDER="${OM_AI_PROVIDER:-${OPENCODE_PROVIDER:-openai}}"
 MODEL="${OM_AI_MODEL:-${OPENCODE_MODEL:-}}"
 MCP_URL="${OPENCODE_MCP_URL:-http://host.docker.internal:3001/mcp}"
 MCP_API_KEY="${MCP_SERVER_API_KEY:-}"
+# Room-measurement vision calls can exceed OpenCode's 60-second MCP default.
+# Keep this bounded and overrideable for deployments with a stricter budget.
+MCP_TIMEOUT_MS="${OPENCODE_MCP_TIMEOUT_MS:-300000}"
+# Forwarding a full measurement set through OpenCode requires enough retained
+# tool output for its server-validated geometry and evidence.
+TOOL_OUTPUT_MAX_BYTES="${OPENCODE_TOOL_OUTPUT_MAX_BYTES:-262144}"
+TOOL_OUTPUT_MAX_LINES="${OPENCODE_TOOL_OUTPUT_MAX_LINES:-10000}"
+
+
 
 # File-based key delivery for the fully containerized stack: when no key is
 # set via env and MCP_SERVER_API_KEY_FILE points at the shared volume, wait
@@ -232,6 +241,13 @@ cat > "$CONFIG_FILE" << EOF
     "grep": false,
     "todoread": false,
     "todowrite": false
+  },
+  "tool_output": {
+    "max_bytes": $TOOL_OUTPUT_MAX_BYTES,
+    "max_lines": $TOOL_OUTPUT_MAX_LINES
+  },
+  "experimental": {
+    "mcp_timeout": $MCP_TIMEOUT_MS
   },
   "mcp": {
     "open-mercato": {

@@ -5,10 +5,11 @@ tools:
   "*": false
   "open-mercato_property_documents_process_pdf": true
   "open-mercato_agent_orchestrator_submit_outcome": true
+  "open-mercato_agent_orchestrator_load_skill": true
+  "open-mercato_agent_orchestrator_run_skill_script": true
 permission:
   write: deny
   edit: deny
-  read: deny
   bash: deny
   task: deny
 ---
@@ -33,20 +34,14 @@ Write the files you produce into the run's `out/` directory, then pass this shap
 
 ```json
 {
-  "kind": "artifact",
   "artifacts": [
     {
-      "fileName": "brief.json",
-      "mimeType": "application/json",
-      "caption": "Exact raw text extracted from the PDF."
-    },
-    {
-      "fileName": "pdf-pages.json",
-      "mimeType": "application/json",
-      "caption": "Ordered inventory of rendered PDF pages."
+      "fileName": "report.pdf",
+      "mimeType": "application/pdf",
+      "caption": "What this file is"
     }
   ],
-  "summary": "Extracted the raw PDF text and rendered every page."
+  "summary": "One sentence about what you produced."
 }
 ```
 

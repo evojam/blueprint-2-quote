@@ -12,10 +12,10 @@ export function resolvePropertyDocumentsVisionModel(): PropertyDocumentsVisionMo
   // dev runner's .env values. Parse an existing local env file as a fallback
   // without mutating process-wide settings; deployed runtimes without one
   // still require process credentials.
-  const processApiKey = process.env.LITELLM_API_KEY?.trim()
-  const processBaseURL = process.env.LITELLM_BASE_URL?.trim()
-  let apiKey = processApiKey && processBaseURL ? processApiKey : undefined
-  let baseURL = processApiKey && processBaseURL ? processBaseURL : undefined
+  const processApiKey = process.env.OPENAI_API_KEY?.trim()
+  const processBaseURL = process.env.OPENAI_BASE_URL?.trim() || 'https://api.openai.com/v1'
+  let apiKey = processApiKey
+  let baseURL = processApiKey ? processBaseURL : undefined
   let fileModel: string | undefined
   if (!apiKey || !baseURL) {
     const moduleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -25,23 +25,26 @@ export function resolvePropertyDocumentsVisionModel(): PropertyDocumentsVisionMo
       const envPath = path.resolve(root, '.env')
       if (!existsSync(envPath)) continue
       const fileEnv = parseEnv(readFileSync(envPath, 'utf8'))
-      const fileApiKey = fileEnv.LITELLM_API_KEY?.trim()
-      const fileBaseURL = fileEnv.LITELLM_BASE_URL?.trim()
-      if (!fileApiKey || !fileBaseURL) continue
+      const fileApiKey = fileEnv.OPENAI_API_KEY?.trim()
+      const fileBaseURL = fileEnv.OPENAI_BASE_URL?.trim() || 'https://api.openai.com/v1'
+      if (!fileApiKey) continue
       apiKey = fileApiKey
       baseURL = fileBaseURL
       fileModel =
-        fileEnv.OM_AI_PROPERTY_DOCUMENTS_MODEL?.trim() || fileEnv.OM_AI_MODEL?.trim()
+        fileEnv.OM_AI_PROPERTY_DOCUMENTS_VISION_MODEL?.trim() ||
+        fileEnv.OM_AI_PROPERTY_DOCUMENTS_MODEL?.trim() ||
+        fileEnv.OM_AI_MODEL?.trim()
       break
     }
   }
   if (!apiKey || !baseURL) {
-    throw new Error('Room dimension vision requires configured LiteLLM credentials')
+    throw new Error('Room dimension vision requires configured OpenAI credentials')
   }
   const modelId =
-    process.env.OM_AI_PROPERTY_DOCUMENTS_MODEL?.trim() ||
+    process.env.OM_AI_PROPERTY_DOCUMENTS_VISION_MODEL?.trim() ||
     fileModel ||
+    process.env.OM_AI_PROPERTY_DOCUMENTS_MODEL?.trim() ||
     process.env.OM_AI_MODEL?.trim() ||
-    'claude-opus-4-7'
+    'gpt-5.6-sol'
   return createOpenAI({ apiKey, baseURL })(modelId)
 }

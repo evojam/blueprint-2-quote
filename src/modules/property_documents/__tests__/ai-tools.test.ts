@@ -171,22 +171,20 @@ describe('property_documents.process_pdf', () => {
       'utf8',
     )
 
-    expect(generated).not.toContain('  read: true')
-    expect(generated).toContain('  read: deny')
-    expect(generated).toContain('  write: deny')
-    expect(generated).toContain('  edit: deny')
-    expect(generated).toContain('  bash: deny')
     expect(generated).toContain('  "*": false')
+    expect(generated).not.toContain('  read: true')
+    expect(generated).not.toContain('  write: true')
+    expect(generated).not.toContain('  edit: true')
+    expect(generated).not.toContain('  bash: true')
     expect(generated.split('\n')).not.toContain('  "*": deny')
     expect(generated).not.toContain('/analysis/**')
     expect(generated).not.toContain('/in/**')
-    expect(generated).not.toContain('  write: true')
-    expect(generated).not.toContain('  edit: true')
-    expect(generated).not.toContain('open-mercato_agent_orchestrator_load_skill')
-    expect(generated).not.toContain('open-mercato_agent_orchestrator_run_skill_script')
+    expect(generated).toContain('open-mercato_agent_orchestrator_load_skill')
+    expect(generated).toContain('open-mercato_agent_orchestrator_run_skill_script')
+    const outcomeStart = generated.indexOf('Pass a complete outcome object.')
     const outcomeContract = generated.slice(
-      generated.indexOf('## Outcome contract'),
-      generated.indexOf('The PDF processing tool is the only output writer.'),
+      outcomeStart,
+      generated.indexOf('The PDF processing tool is the only output writer.', outcomeStart),
     )
     expect(outcomeContract).toContain('"kind": "artifact"')
     expect(outcomeContract).toContain('"fileName": "brief.json"')
@@ -361,6 +359,11 @@ describe('property_documents.process_pdf', () => {
       ],
     })
     expect(runtime.calls.filter((call) => call.file === '/usr/bin/pdftoppm')).toHaveLength(3)
+    expect(
+      runtime.calls
+        .filter((call) => call.file === '/usr/bin/pdftoppm')
+        .every((call) => call.args.includes('150')),
+    ).toBe(true)
     const outputNames = (await readdir(path.join(root, SESSION_TOKEN, 'out'))).sort()
     expect(outputNames).toEqual([
       'brief.json',
