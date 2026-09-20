@@ -2,7 +2,8 @@
 
 **Date**: 2026-09-20
 **Status**: Future ideas — not scheduled, and nobody implements it yet
-**Design decisions**: Q1 to Q5 closed. Q6 and Q7 stay open with Marek.
+**Design decisions**: Q1 to Q5 closed. Q6 and Q7 stay open with Marek. Q8 to Q11 stay open
+on the trait extension.
 
 > This document records a direction, and it does not start work. The hackathon shipped the
 > current pipeline under time pressure, so this specification states what a considered
@@ -588,6 +589,132 @@ offers three actions.
 **The third action needs no new code.** `basisResolver.resolveQuantity` already handles
 `basis: 'given'`, and its comment states the rule: "the operator measured it, we do not
 second-guess it". A manual number is a first class input in this contract today.
+
+## Extension — declarative traits and product driven extraction
+
+**Status: proposed, and open. Q8 to Q11 below stay open.** This section records a direction
+that reaches past the measurement funnel.
+
+### The inversion
+
+A quote does not always need an area. It needs whatever the priced work consumes. That can
+be a count of windows, a count of sockets, a count of light points, a length of pipe, or an
+area of wall. A fixed measurement schema cannot know which one the job needs.
+
+**So the matched products must declare what the funnel extracts.**
+
+```text
+TODAY
+  brief  -->  match_catalog  -->  products
+  plan   -->  measure (fixed schema: floor, walls, openings)
+                       |
+                       +--> quote: basisResolver picks one of five bases
+
+PROPOSED
+  brief  -->  match_catalog  -->  products
+                                     |
+                                     v
+                            required traits (union)
+                                     |
+                                     v
+  plan   -->  measure ONLY those traits, one extractor for each
+                                     |
+                                     v
+                            quote: each product applies its own rule
+```
+
+### What already exists, and what is missing
+
+The repository is closer to this than it looks.
+
+| Piece | State today | Evidence |
+|---|---|---|
+| Matching runs before measurement | **It already does.** `match_catalog` reads `brief.json` | `commands/analysis.ts` |
+| A rule for turning geometry into a quantity | Exists, but as a closed list of five | `Basis` in `quoteContracts.ts:99` |
+| A counted trait | Exists for two kinds only | `derivedFrom: 'door' | 'window'`, `RoomOpening.kind` |
+| A unit guard | Exists | The `unit_mismatch` warning code |
+| A product that states what it needs | **Missing.** `QuotableProduct` carries no parameter | `quoteContracts.ts:46` |
+| An extractor for a trait other than geometry | **Missing** | Nothing counts a socket or a light point |
+
+So `Basis` is the closed ancestor of this idea. The extension opens it.
+
+### The three declarations
+
+**1. A trait registry, and one owner for each trait.** One module declares every trait. A
+trait states its id, its unit, how it appears on a plan, and the extractor that reads it.
+Nothing else restates any of this.
+
+| Field | Example |
+|---|---|
+| `id` | `window`, `door`, `socket`, `light_point`, `radiator`, `wet_riser` |
+| `unit` | `szt`, `m`, `m2` |
+| `appearance` | printed dimension, drawn symbol, hatched region, text label |
+| `extractor` | the prompt, the schema, and the gates that read this trait |
+
+**2. A product states the traits it needs.** The catalog product gains
+`requiredTraits: TraitId[]`.
+
+**3. A product states the rule that turns a trait into a quantity.** A count of sockets
+needs one multiplication. A wall area uses the existing formula. The rule names its trait and its
+unit, and the existing `unit_mismatch` code still guards the result.
+
+### The extraction plan becomes computed, not fixed
+
+Take the union of the required traits across every matched product. That union is the
+extraction plan. A job that paints walls never counts a socket.
+
+**This buys accuracy, not only cost.** A narrow question on a high resolution crop beats a
+broad one. "Count the sockets in this room" is a better prompt than "read this room". So
+the trait design and the crop design push in the same direction.
+
+### Read the legend first
+
+A dimension shows text, and text means the same thing on every drawing. **A symbol
+does not.** The legend of that one drawing defines the socket symbol, the light point
+symbol, and the radiator symbol. Two offices draw them differently.
+
+So a symbol extractor runs in two steps. It reads the legend for the drawing, and then it
+counts the shapes that match. An extractor that skips the legend is guessing.
+
+### The coverage gate generalises, but it gets weaker
+
+G1 today checks that every dimension detection falls inside a crop. The same idea extends
+to a trait: every detected symbol must fall inside a crop.
+
+**State the limit honestly. Detecting printed text is reliable. Detecting a drawn symbol is
+not.** So the coverage guarantee is strong for a dimension and weak for a socket. Report the
+two separately, and never present the second as the first.
+
+### Compatibility
+
+`Basis` is a public contract, and `basisResolver` reads it. Extend it, and do not replace
+it. Keep the five existing values as built in rules, so no quote changes behaviour on the
+day the registry arrives. A contract change here must read
+`.ai/guides/upstream/BACKWARD_COMPATIBILITY.md` first.
+
+### The guard against unbounded scope
+
+An open registry invites a list of traits that nobody implemented. So apply the rule that the rest of this
+document uses. **A trait ships with its extractor, its gates, and its corpus labels.**
+A trait without those three is a promise, and not a capability.
+
+### Open questions for this extension
+
+**Q8 — Where does the trait registry live?** An app module in `property_documents`, or a
+field on the catalog product in the installed `catalog` module? The second couples the
+extraction to a module that this application does not own.
+
+**Q9 — Who authors a trait: an engineer or an operator?** An engineer writes a prompt and a
+schema. An operator knows the trades. A trait that an operator can add needs a safe
+authoring surface, which is a much larger slice.
+
+**Q10 — Does a rule need arithmetic beyond a count and an area?**
+Take a pipe length that follows a route. Take a socket count for each square metre from a
+standard. Each one adds a different extractor class.
+
+**Q11 — What happens when a product needs a trait that the plan does not show?** The current
+answer for geometry is `missingInputs` plus the operator decision. Confirm that the same
+path serves a trait, or name a different one.
 
 ## Goals
 
