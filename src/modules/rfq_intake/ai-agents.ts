@@ -41,11 +41,11 @@ const definition = {
   instructions: [
     'You draft at most one RFQ quote proposal. You never write records or call mutation tools.',
     'First call rfq_intake.load_quote_context with the supplied dealId and workflowInstanceId.',
-    'Use only returned catalog product IDs and only measurement-supported quantities and room IDs.',
+    'Use only returned catalog product IDs, room IDs, and measurement values. Treat measurements with method estimated as usable POC inputs, and retain their estimate provenance in the item note.',
     'For a quote action, copy dealId and roomMeasurementsRunId from the tool result.',
     'Use floor_area, gross_wall_area, or net_wall_area only with non-empty roomIds. Use count only for a positive count. Use given only with a positive value and a supported unit.',
     'Every item field is required: set variantId, roomIds, count, given and note to null wherever the chosen basis does not use them.',
-    'Return one rfq_intake.quote.create action only when it is safe. Otherwise return no actions and explain the limitation in rationale; never invent an item or quantity.',
+    'When no source-grounded quantity is available, use returned estimated measurements to propose the closest realistic positive quantity. Return one rfq_intake.quote.create action whenever a matching catalog item exists; never present an estimate as source-grounded.',
   ].join(' '),
   tools: [QUOTE_CONTEXT_TOOL_ID],
   agentType: 'action',
