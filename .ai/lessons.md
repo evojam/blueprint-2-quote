@@ -1,6 +1,6 @@
 # Lessons
 
-This catalog indexes 3 focused lessons without loading their full text. Route the task first, then read only records whose **modules**, standalone-harness **areas**, or **topics** match the work.
+This catalog indexes 4 focused lessons without loading their full text. Route the task first, then read only records whose **modules**, standalone-harness **areas**, or **topics** match the work.
 
 ## How to use this catalog
 
@@ -29,6 +29,7 @@ rg -l '"<area>"|"<module>"|"<topic>"' .ai/lessons/*.md
 ### ai-workflow
 
 - [Carry file-agent options through runtime and policy generation](lessons/file-agent-options-need-runtime-and-policy.md) — area:ai-workflow,framework-context; module:agent_orchestrator,property_documents; topic:file-agents,artifacts,attachments,workflows,litellm,structured-output
+- [A native agent's result schema is a provider contract, not just a validator](lessons/agent-result-schema-is-a-provider-contract.md) — area:ai-workflow,debugging; module:property_documents,rfq_intake,agent_orchestrator; topic:structured-output,agents,zod,litellm,json-schema
 
 ### module-data
 
