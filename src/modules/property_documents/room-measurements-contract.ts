@@ -1181,6 +1181,17 @@ export function finalizeRoomMeasurementCandidate(input: {
       issue('invalid_scene_rooms', '$.rooms', 'A non-plan scene cannot contain rooms'),
     )
   }
+  // A plan the model itself classified as readable, with nothing traced on it, is not a
+  // measurement — it is a refusal wearing a success. Accepting it produced a run with
+  // `status: ok`, `analysisStatus: 'partial'` and `rooms: []`, from which every
+  // downstream quantity was unresolvable while every step still reported success.
+  // Raised as a semantic issue so the vision runtime's existing correction round gets
+  // one chance to return the rooms it described; a second empty candidate fails the run.
+  if (candidate.sceneKind === 'floor_plan' && candidate.rooms.length === 0) {
+    semanticIssues.push(
+      issue('empty_floor_plan_rooms', '$.rooms', 'A readable floor plan must contain at least one room'),
+    )
+  }
   validateIdsAndReferences(candidate, semanticIssues)
   validateDrawingProvenance(candidate, semanticIssues)
   validateAllMeasurementProvenance(candidate, semanticIssues)
