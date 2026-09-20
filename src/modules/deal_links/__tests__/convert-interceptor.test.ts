@@ -14,13 +14,16 @@ function buildCtx(rows: Array<Record<string, unknown>>) {
     fork: () => em,
     findOne: async (_entity: unknown, where: Record<string, unknown>) => {
       queries.push(where)
+      // Compare only the keys the caller actually filtered on. Hard-coding `tenantId`
+      // here made the fake stricter than the store it stands in for, which is what let
+      // the old `ctx.auth`-derived scoping look correct in tests while failing on the
+      // public acceptance path.
       return (
-        rows.find(
-          (row) =>
-            row.documentId === where.documentId &&
-            row.documentKind === where.documentKind &&
-            row.tenantId === where.tenantId &&
-            row.organizationId === where.organizationId,
+        rows.find((row) =>
+          Object.entries(where).every(([key, value]) => {
+            if (key === 'deletedAt') return true
+            return row[key] === value
+          }),
         ) ?? null
       )
     },
@@ -76,12 +79,39 @@ describe('deal_links.link-converted-order', () => {
     expect(persisted).toHaveLength(0)
   })
 
-  it('scopes the lookup to the acting tenant and organization', async () => {
-    const { ctx, queries } = buildCtx([sourceLink])
+  it('scopes the source lookup to the organization and takes the tenant from the row', async () => {
+    const { ctx, queries, persisted } = buildCtx([sourceLink])
 
     await interceptor.afterExecute?.({ quoteId: QUOTE }, { orderId: ORDER }, ctx)
 
-    expect(queries[0]).toMatchObject({ tenantId: TENANT, organizationId: ORG })
+    // The source row is found by organization — an organization id belongs to exactly one
+    // tenant — and the tenant that scopes the write comes from that row, not from the
+    // actor. See the comment on the interceptor for why reading it off `ctx.auth` was a
+    // bug rather than a style.
+    expect(queries[0]).toMatchObject({ documentId: QUOTE, organizationId: ORG })
+    expect(queries[0]).not.toHaveProperty('tenantId')
+    expect(persisted[0]).toMatchObject({ tenantId: TENANT, organizationId: ORG })
+  })
+
+  /**
+   * Regression: a customer accepting their quote.
+   *
+   * `sales/api/quotes/accept/route.ts:130` builds the command context with `auth: null` —
+   * the customer holds a quote token, not a session — and carries no `tenantId` on it.
+   * While this hook read the tenant off `ctx.auth`, it returned early for every customer
+   * acceptance, so an order created by a customer signing was never linked to its deal.
+   * Only staff-side conversions ever linked. Verified by sabotage: restoring
+   * `ctx.auth?.tenantId` turns this case red and leaves every other case in this file green.
+   */
+  it('links the order when the customer accepted, with no auth on the context', async () => {
+    const { ctx, persisted } = buildCtx([sourceLink])
+    ;(ctx as unknown as { auth: unknown }).auth = null
+
+    await interceptor.afterExecute?.({ quoteId: QUOTE }, { orderId: ORDER }, ctx)
+
+    expect(persisted).toEqual([
+      { dealId: DEAL, documentId: ORDER, documentKind: 'order', tenantId: TENANT, organizationId: ORG },
+    ])
   })
 
   it('fails closed and writes nothing when the context carries no scope', async () => {
