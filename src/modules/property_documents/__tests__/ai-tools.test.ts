@@ -179,8 +179,14 @@ describe('property_documents.process_pdf', () => {
     expect(generated.split('\n')).not.toContain('  "*": deny')
     expect(generated).not.toContain('/analysis/**')
     expect(generated).not.toContain('/in/**')
-    expect(generated).toContain('open-mercato_agent_orchestrator_load_skill')
-    expect(generated).toContain('open-mercato_agent_orchestrator_run_skill_script')
+    // The skill tools are stripped on purpose by `scripts/enable-property-pdf-agent-files.mjs`,
+    // the hardening pass `yarn generate` runs after `mercato generate`; that script
+    // THROWS if either tool survives, so this assertion mirrors its guard rather than
+    // tolerating a regression. `read: deny` is the same pass's doing — the intake agent
+    // reads nothing, its PDF tool does the extraction.
+    expect(generated).not.toContain('open-mercato_agent_orchestrator_load_skill')
+    expect(generated).not.toContain('open-mercato_agent_orchestrator_run_skill_script')
+    expect(generated).toContain('  read: deny')
     const outcomeStart = generated.indexOf('Pass a complete outcome object.')
     const outcomeContract = generated.slice(
       outcomeStart,

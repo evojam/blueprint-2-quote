@@ -5,11 +5,15 @@ tools:
   "*": false
   "open-mercato_property_documents_extract_room_measurements": true
   "open-mercato_agent_orchestrator_submit_outcome": true
-  "open-mercato_agent_orchestrator_load_skill": true
-  "open-mercato_agent_orchestrator_run_skill_script": true
+  read: true
 permission:
   write: deny
   edit: deny
+  read:
+    "*": deny
+    "/home/opencode/work/*/in/**": allow
+    "home/opencode/work/*/in/**": allow
+    "work/*/in/**": allow
   bash: deny
   task: deny
 ---
@@ -25,7 +29,7 @@ Follow exactly this procedure:
 Do not use the native read tool, inspect the image a second time, calculate, infer, summarize, normalize, validate, add, remove, reorder, rename, or reinterpret any returned value. Do not retry either tool. If extraction fails, do not invent an outcome or answer in prose. The extraction result is already the final object; never wrap it in `measurementSet`, `rooms`, or another field.
 
 ## Outcome contract
-Your result MUST match this JSON Schema (the `data` object). Pass it as the `outcome` argument of the submit_outcome tool, as a JSON object (not a string):
+Your result MUST match this JSON Schema (the `data` object). Pass a complete `{ "kind": "research", "data": { ... } }` envelope as the `outcome` argument of the submit_outcome tool; the schema below describes its `data` object:
 
 ```json
 {
