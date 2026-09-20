@@ -5,15 +5,11 @@ tools:
   "*": false
   "open-mercato_property_documents_extract_room_dimensions": true
   "open-mercato_agent_orchestrator_submit_outcome": true
-  read: true
+  "open-mercato_agent_orchestrator_load_skill": true
+  "open-mercato_agent_orchestrator_run_skill_script": true
 permission:
   write: deny
   edit: deny
-  read:
-    "*": deny
-    "/home/opencode/work/*/in/**": allow
-    "home/opencode/work/*/in/**": allow
-    "work/*/in/**": allow
   bash: deny
   task: deny
 ---
@@ -55,7 +51,7 @@ Example `outcome` argument shape only:
 ```
 
 ## Outcome contract
-Your result MUST match this JSON Schema (the `data` array). Pass a complete `{ "kind": "research", "data": [...] }` envelope as the `outcome` argument of the submit_outcome tool; the schema below describes its `data` array:
+Your result MUST match this JSON Schema (the `data` object). Pass it as the `outcome` argument of the submit_outcome tool, as a JSON object (not a string):
 
 ```json
 {

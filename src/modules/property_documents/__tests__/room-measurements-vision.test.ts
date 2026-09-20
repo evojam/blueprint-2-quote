@@ -5,7 +5,7 @@ import { afterAll, beforeEach, describe, expect, it, jest } from '@jest/globals'
 import type { McpToolContext } from '@open-mercato/ai-assistant/modules/ai_assistant/lib/types'
 
 const mockGenerateObject = jest.fn<(input: unknown) => Promise<{ object: unknown }>>()
-const mockVisionModel = jest.fn((modelId: string) => ({ modelId, provider: 'litellm' }))
+const mockVisionModel = jest.fn((modelId: string) => ({ modelId, provider: 'openai' }))
 const mockCreateOpenAI = jest.fn((_options: unknown) => mockVisionModel)
 
 jest.mock('@open-mercato/ai-assistant/modules/ai_assistant/lib/ai-sdk', () => ({
@@ -30,8 +30,9 @@ const DATA_URL = 'data:image/png;base64,AAAA'
 const IMAGE = { imageWidthPx: 1200, imageHeightPx: 800 }
 const context = {} as McpToolContext
 const ENV_KEYS = [
-  'LITELLM_API_KEY',
-  'LITELLM_BASE_URL',
+  'OPENAI_API_KEY',
+  'OPENAI_BASE_URL',
+  'OM_AI_PROPERTY_DOCUMENTS_VISION_MODEL',
   'OM_AI_PROPERTY_DOCUMENTS_MODEL',
   'OM_AI_MODEL',
 ] as const
@@ -187,8 +188,8 @@ beforeEach(() => {
   mockVisionModel.mockClear()
   jest.restoreAllMocks()
   for (const key of ENV_KEYS) delete process.env[key]
-  process.env.LITELLM_API_KEY = 'test-process-key'
-  process.env.LITELLM_BASE_URL = 'https://litellm.example/v1'
+  process.env.OPENAI_API_KEY = 'test-process-key'
+  process.env.OPENAI_BASE_URL = 'https://api.openai.example/v1'
 })
 
 afterAll(() => {
@@ -200,7 +201,7 @@ afterAll(() => {
 })
 
 describe('property documents vision provider', () => {
-  it('keeps process credentials ahead of .env and the property model ahead of the general model', async () => {
+  it('keeps direct OpenAI process credentials ahead of .env and the property model ahead of the general model', async () => {
     process.env.OM_AI_PROPERTY_DOCUMENTS_MODEL = 'property-model'
     process.env.OM_AI_MODEL = 'general-model'
 
@@ -208,8 +209,8 @@ describe('property documents vision provider', () => {
       await writeFile(
         path.join(root, '.env'),
         [
-          'LITELLM_API_KEY=file-key',
-          'LITELLM_BASE_URL=https://file-gateway.example/v1',
+          'OPENAI_API_KEY=file-key',
+          'OPENAI_BASE_URL=https://file-openai.example/v1',
           'OM_AI_PROPERTY_DOCUMENTS_MODEL=file-property-model',
         ].join('\n'),
       )
@@ -218,22 +219,32 @@ describe('property documents vision provider', () => {
 
     expect(mockCreateOpenAI).toHaveBeenCalledWith({
       apiKey: 'test-process-key',
-      baseURL: 'https://litellm.example/v1',
+      baseURL: 'https://api.openai.example/v1',
     })
     expect(mockVisionModel).toHaveBeenCalledWith('property-model')
-    expect(model).toEqual({ modelId: 'property-model', provider: 'litellm' })
+    expect(model).toEqual({ modelId: 'property-model', provider: 'openai' })
   })
 
-  it('uses a complete .env credential pair and its model before the process general model', async () => {
-    delete process.env.LITELLM_BASE_URL
+  it('keeps the dedicated vision model ahead of the property-documents module model', () => {
+    process.env.OM_AI_PROPERTY_DOCUMENTS_VISION_MODEL = 'vision-model'
+    process.env.OM_AI_PROPERTY_DOCUMENTS_MODEL = 'module-model'
+    process.env.OM_AI_MODEL = 'general-model'
+
+    resolvePropertyDocumentsVisionModel()
+
+    expect(mockVisionModel).toHaveBeenCalledWith('vision-model')
+  })
+
+  it('uses direct OpenAI credentials from .env before the process general model', async () => {
+    delete process.env.OPENAI_API_KEY
     process.env.OM_AI_MODEL = 'process-general-model'
 
     await withTemporaryWorkingDirectory(async (root) => {
       await writeFile(
         path.join(root, '.env'),
         [
-          'LITELLM_API_KEY=file-key',
-          'LITELLM_BASE_URL=https://file-gateway.example/v1',
+          'OPENAI_API_KEY=file-key',
+          'OPENAI_BASE_URL=https://file-openai.example/v1',
           'OM_AI_PROPERTY_DOCUMENTS_MODEL=file-property-model',
           'OM_AI_MODEL=file-general-model',
         ].join('\n'),
@@ -243,18 +254,18 @@ describe('property documents vision provider', () => {
 
     expect(mockCreateOpenAI).toHaveBeenCalledWith({
       apiKey: 'file-key',
-      baseURL: 'https://file-gateway.example/v1',
+      baseURL: 'https://file-openai.example/v1',
     })
     expect(mockVisionModel).toHaveBeenCalledWith('file-property-model')
   })
 
-  it('preserves the v1 missing-credentials error without creating a provider', async () => {
-    delete process.env.LITELLM_API_KEY
-    delete process.env.LITELLM_BASE_URL
+  it('requires a direct OpenAI key without creating a provider', async () => {
+    delete process.env.OPENAI_API_KEY
+    delete process.env.OPENAI_BASE_URL
 
     await withTemporaryWorkingDirectory(() => {
       expect(() => resolvePropertyDocumentsVisionModel()).toThrow(
-        'Room dimension vision requires configured LiteLLM credentials',
+        'Room dimension vision requires configured OpenAI credentials',
       )
     })
     expect(mockCreateOpenAI).not.toHaveBeenCalled()
@@ -282,6 +293,13 @@ describe('room measurements vision service', () => {
     expect(call.messages[0].content.map((part) => part.text ?? '').join('\n')).toContain(
       '"sceneKind"',
     )
+    const prompt = call.messages[0].content.map((part) => part.text ?? '').join('\n')
+    expect(prompt).toContain('Make one visual pass per room before collecting measurements')
+    expect(prompt).toContain('prioritize the room boundary dimensions')
+    expect(prompt).toContain('Do not treat numbers in legends, title blocks, symbols, fixture labels')
+    expect(prompt).toContain('Return one room object for every distinct visibly enclosed room')
+    expect(prompt).toContain('Do not leave a visible printed wall dimension null merely because no scale calibration exists')
+    expect(prompt).toContain('A room-level printed height applies to every constant-height wall in that room')
   })
 
   it('returns a valid partial result without asking the model to invent missing evidence', async () => {
@@ -384,7 +402,7 @@ describe('room dimensions v1 provider regression', () => {
 
     expect(mockGenerateObject).toHaveBeenCalledTimes(1)
     const [call] = generationCalls()
-    expect(call.model).toEqual({ modelId: 'v1-property-model', provider: 'litellm' })
+    expect(call.model).toEqual({ modelId: 'v1-property-model', provider: 'openai' })
     expect(call.schema).toBe(roomDimensionsVisionResultSchema)
     expect(call.messages).toEqual([
       {
