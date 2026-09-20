@@ -169,6 +169,7 @@
     "ioredis": "^6.0.0"
   },
   "resolutions": {
+    "@open-mercato/core": "patch:@open-mercato/core@npm%3A0.8.0#./.yarn/patches/@open-mercato-core-npm-0.8.0-strict-json-schema.patch",
     "lodash": "4.18.1",
     "lodash-es": "4.18.1",
     "zod": "4.4.3"

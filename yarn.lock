@@ -4257,6 +4257,43 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@open-mercato/core@patch:@open-mercato/core@npm%3A0.8.0#./.yarn/patches/@open-mercato-core-npm-0.8.0-strict-json-schema.patch::locator=evojam-proptech%40workspace%3A.":
+  version: 0.8.0
+  resolution: "@open-mercato/core@patch:@open-mercato/core@npm%3A0.8.0#./.yarn/patches/@open-mercato-core-npm-0.8.0-strict-json-schema.patch::version=0.8.0&hash=47a1f6&locator=evojam-proptech%40workspace%3A."
+  dependencies:
+    "@dagrejs/dagre": "npm:^3.0.0"
+    "@mikro-orm/core": "npm:^7.1.14"
+    "@mikro-orm/decorators": "npm:^7.1.14"
+    "@mikro-orm/postgresql": "npm:^7.1.14"
+    "@types/leaflet": "npm:^1.9.12"
+    "@types/leaflet.markercluster": "npm:^1.5.5"
+    "@types/sanitize-html": "npm:^2.13.0"
+    "@types/semver": "npm:^7.8.0"
+    "@xyflow/react": "npm:^12.11.5"
+    ai: "npm:^7.0.83"
+    date-fns: "npm:4.4.0"
+    date-fns-tz: "npm:^3.2.0"
+    leaflet: "npm:^1.9.4"
+    leaflet.markercluster: "npm:^1.5.3"
+    mammoth: "npm:^1.9.0"
+    pdfjs-dist: "npm:^6.2.108"
+    resend: "npm:^6.24.0"
+    sanitize-html: "npm:2.17.5"
+    semver: "npm:^7.8.5"
+    sharp: "npm:^0.35.3"
+    svix: "npm:^1.99.1"
+    ts-pattern: "npm:^5.0.0"
+    zod: "npm:^4.4.3"
+  peerDependencies:
+    "@open-mercato/ai-assistant": 0.8.0
+    "@open-mercato/shared": 0.8.0
+    "@open-mercato/ui": 0.8.0
+    react: ^19.0.0
+    react-dom: ^19.0.0
+  checksum: 10c0/b5b593d75d84c43d48940e36e43b1765d57c863287eefb1b971304d505455947875eec470b7d777e3127628e4bb4e959638e79817b8425f98dbed8ec73bb7e40
+  languageName: node
+  linkType: hard
+
 "@open-mercato/documents@npm:0.8.0":
   version: 0.8.0
   resolution: "@open-mercato/documents@npm:0.8.0"
