@@ -50,19 +50,59 @@ const evidenceBoxSchema = z
     }
   })
 
+const candidateLinearMeasurementShape = {
+  id: idSchema,
+  value: positiveNumberSchema,
+  unit: linearUnitSchema,
+  unitSource: z.enum(['label', 'drawing']),
+  method: z.enum(['printed', 'scale_derived', 'estimated']),
+  sourceText: optionalSourceTextSchema,
+  evidence: z.array(evidenceBoxSchema),
+  calibrationId: idSchema.nullable(),
+  confidence: confidenceSchema,
+  estimationReason: z.string().trim().min(1).max(MAX_SOURCE_TEXT_LENGTH).optional(),
+}
+
+function validateEstimatedLinearMeasurement(
+  measurement: {
+    method: 'printed' | 'scale_derived' | 'estimated'
+    sourceText: string | null
+    evidence: unknown[]
+    calibrationId: string | null
+    confidence: number
+    estimationReason?: string
+  },
+  context: z.RefinementCtx,
+): void {
+  if (measurement.method !== 'estimated') {
+    if (measurement.estimationReason !== undefined) {
+      context.addIssue({
+        code: 'custom',
+        path: ['estimationReason'],
+        message: 'Only estimated measurements may include an estimation reason',
+      })
+    }
+    return
+  }
+  if (measurement.confidence <= 0) {
+    context.addIssue({ code: 'custom', path: ['confidence'], message: 'Estimated measurements need positive confidence' })
+  }
+  if (!measurement.estimationReason) {
+    context.addIssue({ code: 'custom', path: ['estimationReason'], message: 'Estimated measurements need a reason' })
+  }
+  if (measurement.sourceText !== null || measurement.evidence.length > 0 || measurement.calibrationId !== null) {
+    context.addIssue({
+      code: 'custom',
+      path: [],
+      message: 'Estimated measurements cannot claim printed or calibrated provenance',
+    })
+  }
+}
+
 const candidateLinearMeasurementSchema = z
-  .object({
-    id: idSchema,
-    value: positiveNumberSchema,
-    unit: linearUnitSchema,
-    unitSource: z.enum(['label', 'drawing']),
-    method: z.enum(['printed', 'scale_derived']),
-    sourceText: optionalSourceTextSchema,
-    evidence: z.array(evidenceBoxSchema),
-    calibrationId: idSchema.nullable(),
-    confidence: confidenceSchema,
-  })
+  .object(candidateLinearMeasurementShape)
   .strict()
+  .superRefine(validateEstimatedLinearMeasurement)
 
 const candidateAreaMeasurementSchema = z
   .object({
@@ -179,9 +219,10 @@ const candidateSchema = z
 export type RoomMeasurementCandidate = z.infer<typeof candidateSchema>
 export const roomMeasurementCandidateSchema: z.ZodType<RoomMeasurementCandidate> = candidateSchema
 
-const linearMeasurementSchema = candidateLinearMeasurementSchema
-  .extend({ calculationEligibility: eligibilitySchema })
+const linearMeasurementSchema = z
+  .object({ ...candidateLinearMeasurementShape, calculationEligibility: eligibilitySchema })
   .strict()
+  .superRefine(validateEstimatedLinearMeasurement)
 const areaMeasurementSchema = candidateAreaMeasurementSchema
   .extend({ calculationEligibility: eligibilitySchema })
   .strict()
@@ -697,7 +738,7 @@ function validateMeasurementProvenance(
         ),
       )
     }
-  } else if (measurement.calibrationId === null) {
+  } else if (measurement.method === 'scale_derived' && measurement.calibrationId === null) {
     issues.push(
       issue('unresolved_reference', `${path}.calibrationId`, 'A scale-derived measurement needs a calibration'),
     )

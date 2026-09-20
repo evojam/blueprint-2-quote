@@ -31,6 +31,8 @@ import {
   ok,
   type Basis,
   type Drawing,
+  type EstimateProvenance,
+  type LinearMeasurement,
   type MeasuredRoom,
   type Quantity,
   type QuantityFailureCode,
@@ -92,6 +94,52 @@ type Args = {
 }
 
 type Numeric = Resolved<number, QuantityFailureCode>
+
+function resolveEstimateProvenance(
+  rooms: MeasuredRoom[],
+  basis: AreaBasis,
+  drawing: Drawing,
+): Resolved<EstimateProvenance[], QuantityFailureCode> {
+  if (basis === 'floor_area') return ok([])
+  const estimates = new Map<string, EstimateProvenance>()
+  const add = (measurement: LinearMeasurement | null | undefined): boolean => {
+    if (!measurement || measurement.method !== 'estimated') return true
+    const reason = measurement.estimationReason?.trim()
+    if (
+      !measurement.id ||
+      !Number.isFinite(measurement.confidence) ||
+      measurement.confidence === undefined ||
+      measurement.confidence <= 0 ||
+      !reason
+    ) {
+      return false
+    }
+    estimates.set(measurement.id, {
+      id: measurement.id,
+      confidence: measurement.confidence,
+      estimationReason: reason,
+    })
+    return true
+  }
+
+  for (const room of rooms) {
+    for (const wall of room.walls) {
+      if (!add(wall.length)) return fail('estimate_provenance_invalid')
+      if (wall.usesGlobalHeight) {
+        if (!add(drawing.globalCeilingHeight)) return fail('estimate_provenance_invalid')
+      } else if (!add(wall.startHeight) || !add(wall.endHeight)) {
+        return fail('estimate_provenance_invalid')
+      }
+    }
+    if (basis === 'net_wall_area') {
+      for (const opening of room.openings) {
+        if (!add(opening.width) || !add(opening.height)) return fail('estimate_provenance_invalid')
+      }
+    }
+  }
+
+  return ok([...estimates.values()])
+}
 
 /** Metres per pixel for the drawing as a whole, or null when nothing calibrates it. */
 function resolveScale(drawing: Drawing): Resolved<number | null, QuantityFailureCode> {
@@ -198,10 +246,20 @@ function areaForRoom(basis: AreaBasis, room: MeasuredRoom, drawing: Drawing, sca
 }
 
 /** A quantity nobody can be billed for is a bug in the drawing, not a free line. */
-function settle(value: number, unit: QuoteUnit, overriddenCount?: number): Resolved<Quantity, QuantityFailureCode> {
+function settle(
+  value: number,
+  unit: QuoteUnit,
+  overriddenCount?: number,
+  estimateProvenance?: EstimateProvenance[],
+): Resolved<Quantity, QuantityFailureCode> {
   const quantity = roundToTwo(value)
   if (!Number.isFinite(quantity) || quantity <= 0) return fail('non_positive_quantity')
-  return ok(overriddenCount === undefined ? { quantity, unit } : { quantity, unit, overriddenCount })
+  return ok({
+    quantity,
+    unit,
+    ...(overriddenCount === undefined ? {} : { overriddenCount }),
+    ...(estimateProvenance?.length ? { estimateProvenance } : {}),
+  })
 }
 
 export function resolveQuantity(
@@ -270,6 +328,8 @@ export function resolveQuantity(
     total += area.value
   }
 
-  // 11.
-  return settle(total, 'm2')
+  // 11. Provenance is collected only after the same measurements have proved billable.
+  const estimateProvenance = resolveEstimateProvenance(rooms, basis, result.drawing)
+  if (!estimateProvenance.ok) return estimateProvenance
+  return settle(total, 'm2', undefined, estimateProvenance.value)
 }

@@ -14,7 +14,7 @@ import { resolveQuantity } from '../lib/basisResolver'
 import { loadQuotableProduct, resolveUnitPrice } from '../lib/catalogPricing'
 import { runCommand } from '../lib/commandBus'
 import { roundToTwo } from '../lib/geometry'
-import type { QuotableProduct, Quantity, RoomMeasurementsResult } from '../lib/quoteContracts'
+import type { EstimateProvenance, QuotableProduct, Quantity, RoomMeasurementsResult } from '../lib/quoteContracts'
 
 /** Quotes are issued in złoty; the seeded catalog prices in nothing else. */
 export const QUOTE_CURRENCY = 'PLN'
@@ -141,7 +141,8 @@ export async function loadRoomMeasurements(
     throw new CrudHttpError(404, { error: 'Room measurements run is unavailable' })
   }
 
-  const parsed = roomMeasurementsResultSchema.safeParse(run.output)
+  const persistedOutput = run.output as { data?: unknown } | null
+  const parsed = roomMeasurementsResultSchema.safeParse(persistedOutput?.data ?? run.output)
   if (!parsed.success) {
     throw new CrudHttpError(422, { error: 'Room measurements run carries an unusable result' })
   }
@@ -224,6 +225,11 @@ const createQuoteCommand: CommandHandler<Record<string, unknown>, QuoteCreateRes
         existing.quantity = roundToTwo(existing.quantity + entry.quantity.quantity)
         existing.indices.push(entry.index)
         if (entry.note) existing.notes.push(entry.note)
+        for (const estimate of entry.quantity.estimateProvenance ?? []) {
+          if (!existing.estimateProvenance.some((item) => item.id === estimate.id)) {
+            existing.estimateProvenance.push(estimate)
+          }
+        }
       } else {
         groups.set(key, {
           product: entry.product,
@@ -231,6 +237,7 @@ const createQuoteCommand: CommandHandler<Record<string, unknown>, QuoteCreateRes
           quantity: entry.quantity.quantity,
           indices: [entry.index],
           notes: entry.note ? [entry.note] : [],
+          estimateProvenance: [...(entry.quantity.estimateProvenance ?? [])],
         })
       }
     }
@@ -281,6 +288,13 @@ const createQuoteCommand: CommandHandler<Record<string, unknown>, QuoteCreateRes
       priceMode: 'gross' as const,
     }))
 
+    const estimateProvenance = new Map<string, EstimateProvenance>()
+    for (const { group } of kept) {
+      for (const estimate of group.estimateProvenance) {
+        estimateProvenance.set(estimate.id, estimate)
+      }
+    }
+
     const customerEntityId = await resolveQuoteCustomer(em, input.dealId)
 
     const created = await runCommand<Record<string, unknown>, { quoteId?: string }>(
@@ -288,12 +302,16 @@ const createQuoteCommand: CommandHandler<Record<string, unknown>, QuoteCreateRes
       'sales.quotes.create',
       {
         ...scope,
+        status: 'draft',
         currencyCode: QUOTE_CURRENCY,
         ...(customerEntityId ? { customerEntityId } : {}),
         metadata: {
           rfqDealId: input.dealId,
           roomMeasurementsRunId: input.roomMeasurementsRunId,
           source: 'rfq_intake',
+          ...(estimateProvenance.size
+            ? { rfqEstimate: true, rfqEstimateProvenance: [...estimateProvenance.values()] }
+            : {}),
         },
         lines,
       },
@@ -330,6 +348,7 @@ type ItemGroup = {
   quantity: number
   indices: number[]
   notes: string[]
+  estimateProvenance: EstimateProvenance[]
 }
 type PricedGroup = { group: ItemGroup; price: { currencyCode: string; unitPriceGross: string; taxRate: string | null } }
 

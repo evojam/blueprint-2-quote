@@ -206,4 +206,12 @@ describe('rfq_intake.quote.create room-measurements run guard', () => {
 
     expect(result).toEqual({ quoteId: null, lineCount: 0, warnings: ['product_not_found:0'] })
   })
+
+  it('accepts the persisted research envelope returned by the agent runtime', async () => {
+    const run = acceptedRun({ output: { kind: 'research', data: measurementResult([]) } })
+
+    const result = await createQuoteCommand.execute(validInput, makeCtx({ run }))
+
+    expect(result).toEqual({ quoteId: null, lineCount: 0, warnings: ['product_not_found:0'] })
+  })
 })
