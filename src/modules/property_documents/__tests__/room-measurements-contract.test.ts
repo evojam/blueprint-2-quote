@@ -493,6 +493,12 @@ describe('deterministic finalization', () => {
     invalid.sceneKind = 'not_floor_plan'
     expectSemanticCode(invalid, 'invalid_scene_rooms')
   })
+
+  it('refuses a readable floor plan that traced no room', () => {
+    const empty = completeCandidate()
+    empty.rooms = []
+    expectSemanticCode(empty, 'empty_floor_plan_rooms')
+  })
 })
 
 describe('controlled semantic failures', () => {

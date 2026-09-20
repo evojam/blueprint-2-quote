@@ -9,6 +9,7 @@ import {
 } from '../property_documents/ai-agents'
 import { ROOM_MEASUREMENTS_AGENT_ID } from '../property_documents/ai-tools'
 import { roomMeasurementSetSchema } from '../property_documents/room-measurements-contract'
+import { catalogUnitSchema, loadCatalogUnits } from './lib/catalogUnits'
 
 export const QUOTE_CONTEXT_TOOL_ID = 'rfq_intake.load_quote_context'
 
@@ -22,6 +23,7 @@ const outputSchema = z.object({
   roomMeasurementsRunId: z.string().uuid(),
   roomMeasurements: roomMeasurementSetSchema,
   catalogMatches: catalogMatcherGroupedResultSchema.shape.data,
+  catalogUnits: z.array(catalogUnitSchema).max(400),
 }).strict()
 
 function scope(context: McpToolContext) {
@@ -73,6 +75,7 @@ export function createQuoteContextTool(): AiToolDefinition {
         roomMeasurementsRunId: measurement.id,
         roomMeasurements: measurements.data,
         catalogMatches: matches.data.data,
+        catalogUnits: await loadCatalogUnits(em, scoped, matches.data.data),
       })
     },
   })

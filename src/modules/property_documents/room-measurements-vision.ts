@@ -69,6 +69,7 @@ function correctionPrompt(error: RoomMeasurementSemanticError): string {
   return [
     'The previous candidate violated server-owned semantic invariants. Return one corrected candidate from the same image.',
     'Correct only the listed issue codes and paths. Do not invent genuinely absent evidence or output reasoning, credentials, paths, stack traces, or a transcript.',
+    'Keep every room the previous candidate contained. Never delete, merge, or truncate rooms to satisfy an issue: an empty or shortened room list is a worse answer than a partially evidenced one.',
     `Server issue codes and paths: ${JSON.stringify(issues)}`,
   ].join('\n')
 }
