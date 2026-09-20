@@ -76,8 +76,9 @@ export function isRfqActionExecuted(payload: ActionExecutedPayload): boolean {
 }
 
 /**
- * Fetches and stores the e-mail's PDFs, then links them on the e-mail row so a second
- * acceptance of the same RFQ finds them and skips the provider entirely.
+ * Fetches the e-mail's PDFs, stores them ON THE DEAL so they show up in the case's Files
+ * tab, then records their ids on the e-mail row so a second acceptance of the same RFQ
+ * finds them and skips the provider entirely.
  *
  * Best effort throughout: a provider outage, an unconfigured integration or a failed
  * download leaves the case open without attachments — the same outcome as an enquiry that
@@ -86,7 +87,12 @@ export function isRfqActionExecuted(payload: ActionExecutedPayload): boolean {
 async function pullInboundAttachments(
   resolve: SubscriberContext['resolve'],
   em: EntityManager,
-  input: { scope: { tenantId: string; organizationId: string }; emailId: string; messageId: string | null },
+  input: {
+    scope: { tenantId: string; organizationId: string }
+    emailId: string
+    dealId: string
+    messageId: string | null
+  },
 ): Promise<string[]> {
   try {
     const key = await resolveResendApiKey(resolve, input.scope)
@@ -100,12 +106,13 @@ async function pullInboundAttachments(
     const files = await fetchInboundPdfs({ apiKey: key.apiKey, messageId: input.messageId })
     if (files.length === 0) return []
 
-    const ids = await storeInboundPdfs({ em, scope: input.scope, emailId: input.emailId, files })
+    const ids = await storeInboundPdfs({ em, scope: input.scope, dealId: input.dealId, files })
     if (ids.length === 0) return []
 
     // Linking is an optimization, not a precondition: it makes a second acceptance skip
-    // the provider and lets the inbox UI show the files (its response mapper already
-    // reads this field). The attachments are stored and usable whether or not it lands,
+    // the provider and keeps the backlink from the e-mail to the files the case now owns
+    // (the inbox response mapper already reads this field). The attachments are stored
+    // on the deal and usable whether or not this lands,
     // so its failure must not discard them — the analysis is the point.
     try {
       const row = await em.findOne(InboxEmail, { id: input.emailId, ...input.scope, deletedAt: null })
@@ -205,6 +212,7 @@ export default async function handler(
     attachmentIds = await pullInboundAttachments(ctx.resolve, em, {
       scope: { tenantId, organizationId },
       emailId: proposal.inboxEmailId,
+      dealId,
       messageId: email.messageId ?? null,
     })
   }

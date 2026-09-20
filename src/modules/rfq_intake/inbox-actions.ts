@@ -9,6 +9,7 @@ import {
 import { createLogger } from '@open-mercato/shared/lib/logger'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { ensureContact } from './lib/ensureContact'
+import { logInboundEmailActivity } from './lib/emailActivity'
 import { resolveRfqStageId } from './lib/pipeline'
 
 const logger = createLogger('rfq_intake').child({ component: 'inbox-action' })
@@ -276,6 +277,25 @@ async function executeCreateRfqAction(
   const dealId = result?.dealId ?? result?.entityId ?? result?.id
   if (!dealId) {
     throw new ExecutionError('Deal creation returned no id; the RFQ was not opened.', 500)
+  }
+
+  // The case exists because a message arrived, so the message opens its timeline. Done
+  // here rather than in the `rfq_intake.rfq.created` subscriber so it lands with the
+  // case itself: the subscriber runs on a queue and returns early for an RFQ with no
+  // attachments, and the correspondence is worth recording either way.
+  //
+  // Only when a contact was guaranteed: an interaction's parent is a customer entity
+  // (`requireTimelineParentEntity`), and the deal page renders activities for the
+  // deal's linked people — without one there is nothing to hang the row off and
+  // nowhere it would show.
+  if (contact?.customerEntityId) {
+    await logInboundEmailActivity(ctx, {
+      proposalId: action.proposalId,
+      dealId,
+      customerEntityId: contact.customerEntityId,
+    })
+  } else {
+    logger.info('RFQ case opened without a contact; the e-mail activity is skipped', { dealId })
   }
 
   logger.info('RFQ case opened from inbox action', {

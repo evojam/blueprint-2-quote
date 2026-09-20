@@ -1,6 +1,6 @@
 # Lessons
 
-This catalog indexes 2 focused lessons without loading their full text. Route the task first, then read only records whose **modules**, standalone-harness **areas**, or **topics** match the work.
+This catalog indexes 3 focused lessons without loading their full text. Route the task first, then read only records whose **modules**, standalone-harness **areas**, or **topics** match the work.
 
 ## How to use this catalog
 
@@ -29,6 +29,10 @@ rg -l '"<area>"|"<module>"|"<topic>"' .ai/lessons/*.md
 ### ai-workflow
 
 - [Carry file-agent options through runtime and policy generation](lessons/file-agent-options-need-runtime-and-policy.md) — area:ai-workflow,framework-context; module:agent_orchestrator,property_documents; topic:file-agents,artifacts,attachments,workflows,litellm,structured-output
+
+### module-data
+
+- [An attachment shows up where its columns point, not where its assignments do](lessons/attachment-visibility-follows-columns-not-assignments.md) — area:module-data,backend-ui; module:attachments,customers,rfq_intake; topic:attachments,assignments,record-linking,deal-files
 
 ### umes
 
