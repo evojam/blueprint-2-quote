@@ -143,6 +143,9 @@ describe('start-rfq-analysis', () => {
     await handler(executedAction(), ctx)
 
     expect(fetchInboundPdfs).toHaveBeenCalledWith({ apiKey: 'test-key', messageId: '<abc@mail>' })
+    // The files belong to the CASE: the deal's Files tab lists attachments by
+    // entityId/recordId, so an id stored against the e-mail row would never show there.
+    expect(storeInboundPdfs).toHaveBeenCalledWith(expect.objectContaining({ dealId: DEAL }))
     // The `em` stub has no `findOne`, so writing the link back throws. That is
     // deliberate here: the attachments are already in storage and usable, so a failed
     // link must not discard them — the analysis still has to start.

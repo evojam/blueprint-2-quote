@@ -184,7 +184,21 @@ export async function fetchInboundPdfs(input: {
 }
 
 /**
- * Persists the files against the e-mail record and returns their attachment ids.
+ * Persists the files against the DEAL the RFQ opened and returns their attachment ids.
+ *
+ * The deal, not the e-mail row, because that is where the files are used and looked for:
+ * the deal detail page's Files tab lists attachments by `entityId`/`recordId`
+ * (`customers/backend/customers/deals/[id]/page.tsx:603`), and the attachments list route
+ * filters on those COLUMNS — the `assignments` array in `storage_metadata` is display
+ * metadata, not a second index, so a row owned by the e-mail can never surface on the
+ * case. The rendered floor-plan pages already land on the deal the same way
+ * (`agent_orchestrator.artifact.promote` in `commands/analysis.ts`), so the customer's
+ * own PDFs sitting somewhere else was the odd one out.
+ *
+ * The ids are still written onto `inbox_emails.attachment_ids` by the caller: that field
+ * is the re-acceptance cache and the backlink, and nothing in the installed inbox UI
+ * renders the files themselves (`attachmentIds` appears only in the API response
+ * mapper), so nothing is lost by owning them from the case.
  *
  * `createAttachmentFromBuffer` is the installed seam for server-side producers that
  * materialize an attachment without going through the multipart upload route; it resolves
@@ -193,7 +207,7 @@ export async function fetchInboundPdfs(input: {
 export async function storeInboundPdfs(input: {
   em: EntityManager
   scope: Scope
-  emailId: string
+  dealId: string
   files: InboundPdf[]
 }): Promise<string[]> {
   const ids: string[] = []
@@ -203,8 +217,8 @@ export async function storeInboundPdfs(input: {
         em: input.em,
         tenantId: input.scope.tenantId,
         organizationId: input.scope.organizationId,
-        entityId: E.inbox_ops.inbox_email,
-        recordId: input.emailId,
+        entityId: E.customers.customer_deal,
+        recordId: input.dealId,
         fileName: file.fileName,
         mimeType: file.mimeType,
         buffer: file.buffer,
