@@ -101,6 +101,32 @@ describe('rfq_intake.quote.create input contract', () => {
     expect(parsed.items[0]).not.toHaveProperty('count')
   })
 
+  it('accepts the explicit nulls the drafter must emit under OpenAI strict mode', () => {
+    // `rfq_intake.quote_drafter` declares every item field nullable rather than
+    // optional — a property missing from `required` is a 400 before the model runs.
+    const parsed = quoteCreateInputSchema.parse({
+      dealId,
+      roomMeasurementsRunId: runId,
+      items: [
+        {
+          catalogProductId: productId,
+          variantId: null,
+          basis: 'floor_area',
+          roomIds: ['room-1'],
+          count: null,
+          given: null,
+          note: null,
+        },
+      ],
+    })
+
+    expect(parsed.items[0]).toEqual({
+      catalogProductId: productId,
+      basis: 'floor_area',
+      roomIds: ['room-1'],
+    })
+  })
+
   it('rejects an empty item list instead of creating an empty quote', () => {
     expect(() =>
       quoteCreateInputSchema.parse({ dealId, roomMeasurementsRunId: runId, items: [] }),

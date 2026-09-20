@@ -41,7 +41,7 @@ const roomIds = z.array(z.string().min(1).max(200)).min(1).max(200)
  * carrying its own fields, rather than as another `field?` most bases would ignore.
  * None of those is implemented; see the spec's reserved-bases table.
  */
-const quoteItemSchema = z.discriminatedUnion('basis', [
+const quoteItemVariantSchema = z.discriminatedUnion('basis', [
   z.object({ ...itemCommon, basis: z.literal('floor_area'), roomIds }),
   z.object({ ...itemCommon, basis: z.literal('gross_wall_area'), roomIds }),
   z.object({ ...itemCommon, basis: z.literal('net_wall_area'), roomIds }),
@@ -52,6 +52,18 @@ const quoteItemSchema = z.discriminatedUnion('basis', [
     given: z.object({ value: z.number().positive(), unit: z.enum(['m2', 'mb', 'szt', 'kpl']) }),
   }),
 ])
+
+/**
+ * `rfq_intake.quote_drafter` must declare every item field as nullable rather than
+ * optional — OpenAI's strict structured outputs reject a schema whose property is
+ * missing from `required`, before the model runs. So the drafter emits `count: null`
+ * on a `floor_area` item, and a null here means "this basis does not use the field",
+ * which is exactly what the discriminated union expresses as an absent key.
+ */
+const quoteItemSchema = z.preprocess((value) => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return value
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== null))
+}, quoteItemVariantSchema)
 
 /**
  * Non-strict on purpose: unknown keys are STRIPPED rather than rejected. This payload

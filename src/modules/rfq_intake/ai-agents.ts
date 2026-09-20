@@ -13,15 +13,19 @@ const quoteDraftResultSchema = z.object({
       payload: z.object({
         dealId: z.string().uuid(),
         roomMeasurementsRunId: z.string().uuid(),
+        // Nullable, never optional: `@ai-sdk/openai` sends structured outputs with
+        // `strict: true`, where every property must also appear in `required`, so a
+        // single `?` is a 400 before the model runs. `rfq_intake.quote.create` strips
+        // the nulls back out — see `quote-create.ts`.
         items: z.array(z.object({
           catalogProductId: z.string().uuid(),
-          variantId: z.string().uuid().optional(),
+          variantId: z.string().uuid().nullable(),
           basis: z.enum(['floor_area', 'gross_wall_area', 'net_wall_area', 'count', 'given']),
-          roomIds: z.array(z.string()).optional(),
-          count: z.number().int().positive().optional(),
-          given: z.object({ value: z.number().positive(), unit: z.enum(['m2', 'mb', 'szt', 'kpl']) }).optional(),
-          note: z.string().max(1000).optional(),
-        })).min(1).max(100),
+          roomIds: z.array(z.string()).nullable(),
+          count: z.number().int().positive().nullable(),
+          given: z.object({ value: z.number().positive(), unit: z.enum(['m2', 'mb', 'szt', 'kpl']) }).strict().nullable(),
+          note: z.string().max(1000).nullable(),
+        }).strict()).min(1).max(100),
       }).strict(),
     })).max(1),
     confidence: z.number().min(0).max(1),
@@ -40,6 +44,7 @@ const definition = {
     'Use only returned catalog product IDs and only measurement-supported quantities and room IDs.',
     'For a quote action, copy dealId and roomMeasurementsRunId from the tool result.',
     'Use floor_area, gross_wall_area, or net_wall_area only with non-empty roomIds. Use count only for a positive count. Use given only with a positive value and a supported unit.',
+    'Every item field is required: set variantId, roomIds, count, given and note to null wherever the chosen basis does not use them.',
     'Return one rfq_intake.quote.create action only when it is safe. Otherwise return no actions and explain the limitation in rationale; never invent an item or quantity.',
   ].join(' '),
   tools: [QUOTE_CONTEXT_TOOL_ID],
