@@ -9,6 +9,7 @@ import {
 import { createLogger } from '@open-mercato/shared/lib/logger'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { ensureContact } from './lib/ensureContact'
+import { logSourceEmailActivity } from './lib/logSourceEmail'
 import { resolveRfqStageId } from './lib/pipeline'
 
 const logger = createLogger('rfq_intake').child({ component: 'inbox-action' })
@@ -276,6 +277,17 @@ async function executeCreateRfqAction(
   const dealId = result?.dealId ?? result?.entityId ?? result?.id
   if (!dealId) {
     throw new ExecutionError('Deal creation returned no id; the RFQ was not opened.', 500)
+  }
+
+  // The enquiry itself, on the case's timeline. Only with a contact: the deal's activity
+  // section refuses to render a row that owns no customer record, so without one the
+  // interaction would exist but stay invisible.
+  if (contact?.customerEntityId) {
+    await logSourceEmailActivity(ctx, {
+      proposalId: action.proposalId,
+      dealId,
+      contactEntityId: contact.customerEntityId,
+    })
   }
 
   logger.info('RFQ case opened from inbox action', {
