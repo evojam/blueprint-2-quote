@@ -1,0 +1,36 @@
+diff --git a/dist/modules/inbox_ops/lib/llmProvider.js b/dist/modules/inbox_ops/lib/llmProvider.js
+index 1111111..2222222 100644
+--- a/dist/modules/inbox_ops/lib/llmProvider.js
++++ b/dist/modules/inbox_ops/lib/llmProvider.js
+@@ -115,7 +115,12 @@
+       schema: extractionOutputSchema,
+       system: input.systemPrompt,
+       prompt: input.userPrompt,
+-      temperature: 0
++      temperature: 0,
++      // `extractionOutputSchema` leaves `requiredFeature` optional, and OpenAI's
++      // strict structured outputs demand every property sit in `required`, so the
++      // call is rejected with a 400 before the model ever runs.
++      // Upstream: https://github.com/open-mercato/open-mercato/issues/6287
++      providerOptions: { openai: { strictJsonSchema: false } }
+     }),
+     input.timeoutMs,
+     `LLM extraction timed out after ${input.timeoutMs}ms`
+diff --git a/src/modules/inbox_ops/lib/llmProvider.ts b/src/modules/inbox_ops/lib/llmProvider.ts
+index 3333333..4444444 100644
+--- a/src/modules/inbox_ops/lib/llmProvider.ts
++++ b/src/modules/inbox_ops/lib/llmProvider.ts
+@@ -216,7 +216,12 @@
+       schema: extractionOutputSchema,
+       system: input.systemPrompt,
+       prompt: input.userPrompt,
+-      temperature: 0,
++      temperature: 0,
++      // `extractionOutputSchema` leaves `requiredFeature` optional, and OpenAI's
++      // strict structured outputs demand every property sit in `required`, so the
++      // call is rejected with a 400 before the model ever runs.
++      // Upstream: https://github.com/open-mercato/open-mercato/issues/6287
++      providerOptions: { openai: { strictJsonSchema: false } },
+     }),
+     input.timeoutMs,
+     `LLM extraction timed out after ${input.timeoutMs}ms`,
