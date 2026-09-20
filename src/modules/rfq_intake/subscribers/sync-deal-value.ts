@@ -1,10 +1,9 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { CustomerDeal } from '@open-mercato/core/modules/customers/data/entities'
-import { SalesQuote } from '@open-mercato/core/modules/sales/data/entities'
 import type { CommandRuntimeContext } from '@open-mercato/shared/lib/commands'
 import { createLogger } from '@open-mercato/shared/lib/logger'
-import { DealDocumentLink } from '@/modules/deal_links/data/entities'
 import { runCommand } from '../lib/commandBus'
+import { resolveCaseId } from '../lib/quoteCase'
 
 const logger = createLogger('rfq_intake').child({ subscriber: 'sync-deal-value' })
 
@@ -55,38 +54,6 @@ function trimmed(value: unknown): string | null {
  */
 export function isQuoteTotalsEvent(payload: TotalsCalculatedPayload): boolean {
   return payload?.documentKind === 'quote' && Boolean(trimmed(payload?.documentId))
-}
-
-/**
- * The case a quote was priced for, or `null` when it was not priced for one.
- *
- * Two sources because the two are written by different code at different times, and
- * either can be the only one present. `metadata.rfqDealId` is stamped by
- * `rfq_intake.quote.create` as part of the quote itself, so it survives anything that
- * happens to the link table; the `deal_links` row is what the UI actually renders and
- * is also what a quote linked to a case by hand would carry. Metadata is consulted
- * first because it is the one this module wrote and cannot be detached by an operator.
- */
-async function resolveCaseId(
-  em: EntityManager,
-  scope: { tenantId: string; organizationId: string },
-  quoteId: string,
-): Promise<{ dealId: string; currencyCode: string } | null> {
-  const quote = await em.findOne(SalesQuote, { id: quoteId, ...scope, deletedAt: null })
-  if (!quote) return null
-
-  const metadata = (quote.metadata ?? null) as Record<string, unknown> | null
-  const stamped = trimmed(metadata?.rfqDealId)
-  if (stamped) return { dealId: stamped, currencyCode: quote.currencyCode }
-
-  const link = await em.findOne(DealDocumentLink, {
-    documentId: quoteId,
-    documentKind: 'quote',
-    ...scope,
-    deletedAt: null,
-  })
-  const linked = trimmed(link?.dealId)
-  return linked ? { dealId: linked, currencyCode: quote.currencyCode } : null
 }
 
 export default async function handler(
