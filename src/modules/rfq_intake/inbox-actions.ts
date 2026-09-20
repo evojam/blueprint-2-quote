@@ -1,6 +1,7 @@
 import type { InboxActionDefinition, InboxActionExecutionContext } from '@open-mercato/shared/modules/inbox-actions'
 import { z } from 'zod'
 import { orderPayloadSchema } from '@open-mercato/core/modules/inbox_ops/data/validators'
+import { CustomerEntity } from '@open-mercato/core/modules/customers/data/entities'
 import {
   asHelperContext,
   executeCommand,
@@ -8,7 +9,7 @@ import {
 } from '@open-mercato/core/modules/inbox_ops/lib/executionHelpers'
 import { createLogger } from '@open-mercato/shared/lib/logger'
 import type { EntityManager } from '@mikro-orm/postgresql'
-import { ensureContact } from './lib/ensureContact'
+import { ensureContact, type EnsuredContact } from './lib/ensureContact'
 import { loadRfqSenderContact, logInboundEmailActivity } from './lib/emailActivity'
 import { resolveRfqStageId } from './lib/pipeline'
 
@@ -229,6 +230,43 @@ async function normalizeRfqPayload(
   return payload
 }
 
+/**
+ * The customer the extraction payload named, when it named one that actually exists.
+ *
+ * `customerEntityId` has always been in the payload schema, and the model does emit it
+ * (proposal `1c934631` carried one while carrying neither `customerName` nor
+ * `customerEmail`) — nothing read it, so the case opened with no contact and the quote
+ * it produced showed no customer.
+ *
+ * The id is model-authored, so it is proven by reading the row back inside the derived
+ * scope, exactly as `quote-create.ts` proves its `dealId`. A person that is not in this
+ * scope, is soft-deleted, or is a company rather than a person is refused and the
+ * e-mail path takes over — an invented id must not become a silent mis-attribution.
+ */
+async function resolvePayloadCustomer(
+  ctx: InboxActionExecutionContext,
+  customerEntityId: string | undefined,
+): Promise<EnsuredContact | null> {
+  if (!customerEntityId) return null
+
+  const em = ctx.em as EntityManager
+  const person = await em.findOne(CustomerEntity, {
+    id: customerEntityId,
+    tenantId: ctx.tenantId,
+    organizationId: ctx.organizationId,
+    kind: 'person',
+    deletedAt: null,
+  })
+  if (!person) {
+    logger.warn('Payload named a customer that is not readable in this scope; ignoring it', {
+      customerEntityId,
+    })
+    return null
+  }
+
+  return { customerEntityId: person.id, companyEntityId: null, created: false }
+}
+
 async function executeCreateRfqAction(
   action: { id: string; proposalId: string; payload: unknown },
   ctx: InboxActionExecutionContext,
@@ -236,18 +274,29 @@ async function executeCreateRfqAction(
   const hCtx = asHelperContext(ctx)
   const payload = action.payload as RfqPayload
 
-  // The extraction model omits `customerEmail` often enough that RFQ cases were opening
-  // with no contact at all — and a case with no contact produces a quote with no
-  // customer on it. The inbox row behind the action knows who wrote, so it is the
-  // fallback rather than giving up on the contact.
-  const sender = payload.customerEmail ? null : await loadRfqSenderContact(ctx, action.proposalId)
+  // Three sources, most specific first. The extraction model answers with a shape of
+  // its own each run — `customerEntityId` here, nothing at all there — so one source is
+  // not enough to guarantee the contact, and a case with no contact produces a quote
+  // with no customer on it.
+  const named = await resolvePayloadCustomer(ctx, payload.customerEntityId)
+  if (named) {
+    logger.info('RFQ action named an existing customer; using it', {
+      customerEntityId: named.customerEntityId,
+    })
+  }
+
+  // The inbox row behind the action knows who wrote, so it is the last fallback rather
+  // than giving up on the contact.
+  const sender = named || payload.customerEmail
+    ? null
+    : await loadRfqSenderContact(ctx, action.proposalId)
   if (sender) {
     logger.info('RFQ action carried no customer e-mail; using the message sender', {
       proposalId: action.proposalId,
     })
   }
 
-  const contact = await ensureContact(ctx, {
+  const contact = named ?? await ensureContact(ctx, {
     email: payload.customerEmail ?? sender?.email ?? null,
     name: payload.customerName ?? sender?.name ?? null,
     phone: payload.customerPhone,
