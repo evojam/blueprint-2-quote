@@ -155,6 +155,106 @@ field that the funnel produces: `drawing.imageWidthPx`, `drawing.calibrations`,
 `rooms[].readiness`, `rooms[].missingInputs`, and `analysisStatus`. This specification
 supplies a producer for a contract that the consumer already reads.
 
+## The agentic workflow, and the patterns it uses
+
+```text
+  attachment (PDF)
+        |
+        v
+  +-------------------------------+
+  | pdf_intake          (exists)  |  ---------------- CHAIN, step 1
+  | pdftoppm, 150 DPI, every page |
+  +-------------------------------+
+        |  pdf-page-####.png  +  brief.json
+        v
+ ===============================================================
+ | room_measurements                        [ORCHESTRATOR]     |
+ | one agent, bounded tools, no host path in any model output  |
+ |=============================================================|
+ |                                                             |
+ |  STAGE A   classify every page            [ROUTER+FAN-OUT]  |
+ |     page 1 --> plan?  yes --+                               |
+ |     page 2 --> plan?  no  --+--> drop, one cheap call       |
+ |     page N --> plan?  yes --+                               |
+ |                             |                               |
+ |  STAGE B   budget per region|             [DETERMINISTIC]   |
+ |     headroom = available_px / model_limit   no model call   |
+ |                             |                               |
+ |  STAGE C   scale            |             [DETERMINISTIC    |
+ |     declaredScale, calibrations[]          + one call]      |
+ |                             |                               |
+ |  STAGE D   locate the rooms |             [FAN-OUT: region] |
+ |     one call for each plan region                           |
+ |                             |                               |
+ |                             v                               |
+ |  STAGE E   measure one room               [FAN-OUT: room]   |
+ |     +----------+----------+----------+    independent,      |
+ |     |  room 1  |  room 2  |  room K  |    parallel          |
+ |     +----+-----+-----+----+-----+----+    <-- the cost      |
+ |          |           |          |             multiplies    |
+ |          v           v          v              here         |
+ |     +-------------------------------+                       |
+ |     | G1..G8  arithmetic gates      |     [GUARDRAIL]       |
+ |     +---------------+---------------+      no model, free   |
+ |                     | only a marked room continues          |
+ |                     v                                       |
+ |     +-------------------------------+                       |
+ |     | G9..G12 judge, separate call  |     [LLM-AS-JUDGE]    |
+ |     +---------------+---------------+                       |
+ |                     | fail AND headroom > 1                 |
+ |                     v                                       |
+ |     +-------------------------------+     [EVALUATOR-       |
+ |     | recovery: re-crop / re-render |      OPTIMIZER LOOP]  |
+ |     |           / split / escalate  |      bound: 2 tries   |
+ |     +---------------+---------------+                       |
+ |                     | back to STAGE E                       |
+ |                     +-----------------+                     |
+ |                                       v                     |
+ |  STAGE F   aggregate and score            [FAN-IN / REDUCE] |
+ |     rooms[] + warnings[] + analysisStatus                   |
+ ===============================================================
+        |  research outcome = RoomMeasurementsResult
+        v
+  +-------------------------------+
+  | rfq_intake.quote.create       |  ---------------- CHAIN, last step
+  +---------------+---------------+
+                  | analysisStatus = partial
+                  v
+  +-------------------------------+
+  | operator decides              |     [HUMAN IN THE LOOP]
+  | request / skip / given        |
+  +-------------------------------+
+```
+
+### The patterns, and why each one sits where it does
+
+| Pattern | Where | Why here | Cost |
+|---|---|---|---|
+| Chain | `pdf_intake` to `room_measurements` to `quote.create` | Each step needs the output of the one before it | One pass |
+| Orchestrator with tools | The agent against four bounded tools | The tool owns every path, command, and byte. The model owns no host path | None |
+| Router | Stage A | A page that holds no plan must leave early | One cheap call for each page |
+| Fan-out | Stage D for each region, Stage E for each room | Every room is independent, so the calls run in parallel | **The multiplier. Watch it here** |
+| Guardrail | G1 to G8 | A formula beats a model, and it costs nothing | Free |
+| LLM as judge | G9 to G12 | Sharpness, truncation, and prose need a view or a reader | Doubles the call count for a marked room |
+| Evaluator and optimizer | The recovery loop | A failed gate names the action that can fix it | Up to two more tries for each room |
+| Fan-in | Stage F | One result, one status, one list of warnings | Free |
+| Human in the loop | The `partial` decision | Relevance belongs to the operator | One operator action |
+
+### Patterns this design rejects, and the reason
+
+| Pattern | Why not |
+|---|---|
+| Swarm, or a hand off between peer agents | No agent would own the whole sheet. The coverage gate needs one owner that sees every detection and every crop, so a swarm removes the strongest guard in the design |
+| Self reflection | The judge runs as a separate call for this reason. A model that grades its own answer agrees with itself |
+| Debate between several models | The cost multiplies for each room, and the arithmetic gates already give a stronger signal than a second opinion |
+| A long conversation with memory | Every stage is stateless, and its input is a file plus a rectangle. Memory would add a failure mode and no accuracy |
+| An agent that writes files | The tools write. The agent names a page and a rectangle. This keeps the reviewed security surface of `pdf_intake` |
+
+**Read the fan-out row as the cost model of the whole design.** A sheet with ten rooms
+costs ten measurement calls. A judge on a marked room adds one. A recovery try adds
+another. The arithmetic gates are more reliable than the judge. They also keep the judge off every
+room that does not need it.
+
 ## Phase 0 — the evaluation set, not a spike
 
 An earlier draft of this specification made Phase 0 a three number spike. That was wrong.
