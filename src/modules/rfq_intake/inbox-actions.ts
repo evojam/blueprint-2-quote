@@ -9,7 +9,7 @@ import {
 import { createLogger } from '@open-mercato/shared/lib/logger'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { ensureContact } from './lib/ensureContact'
-import { logInboundEmailActivity } from './lib/emailActivity'
+import { loadRfqSenderContact, logInboundEmailActivity } from './lib/emailActivity'
 import { resolveRfqStageId } from './lib/pipeline'
 
 const logger = createLogger('rfq_intake').child({ component: 'inbox-action' })
@@ -236,9 +236,20 @@ async function executeCreateRfqAction(
   const hCtx = asHelperContext(ctx)
   const payload = action.payload as RfqPayload
 
+  // The extraction model omits `customerEmail` often enough that RFQ cases were opening
+  // with no contact at all — and a case with no contact produces a quote with no
+  // customer on it. The inbox row behind the action knows who wrote, so it is the
+  // fallback rather than giving up on the contact.
+  const sender = payload.customerEmail ? null : await loadRfqSenderContact(ctx, action.proposalId)
+  if (sender) {
+    logger.info('RFQ action carried no customer e-mail; using the message sender', {
+      proposalId: action.proposalId,
+    })
+  }
+
   const contact = await ensureContact(ctx, {
-    email: payload.customerEmail,
-    name: payload.customerName,
+    email: payload.customerEmail ?? sender?.email ?? null,
+    name: payload.customerName ?? sender?.name ?? null,
     phone: payload.customerPhone,
     companyName: payload.companyName,
   })
