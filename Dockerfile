@@ -35,6 +35,9 @@ RUN apk add --no-cache python3 make g++ ca-certificates openssl
 RUN corepack enable
 
 COPY package.json yarn.lock .yarnrc.yml ./
+# `resolutions` carries patch: entries, and yarn resolves them before it installs
+# anything — so the patch files have to land before `yarn install`, not with `COPY . .`.
+COPY .yarn ./.yarn
 RUN if grep -Eq 'http://(localhost|127\\.0\\.0\\.1):' .yarnrc.yml; then \
       sed \
         -e "s#http://localhost:#http://${OPEN_MERCATO_DOCKER_REGISTRY_HOST}:#g" \
@@ -68,6 +71,8 @@ RUN apk add --no-cache python3 make g++ ca-certificates openssl poppler-utils
 RUN corepack enable
 
 COPY package.json yarn.lock .yarnrc.yml ./
+# See the builder stage: patch files must precede `yarn install`.
+COPY .yarn ./.yarn
 RUN if grep -Eq 'http://(localhost|127\\.0\\.0\\.1):' .yarnrc.yml; then \
       sed \
         -e "s#http://localhost:#http://${OPEN_MERCATO_DOCKER_REGISTRY_HOST}:#g" \
@@ -135,6 +140,8 @@ USER omuser
 WORKDIR /app
 
 COPY --chown=omuser:omuser package.json yarn.lock .yarnrc.yml ./
+# See the builder stage: patch files must precede `yarn workspaces focus`.
+COPY --chown=omuser:omuser .yarn ./.yarn
 RUN if grep -Eq 'http://(localhost|127\\.0\\.0\\.1):' .yarnrc.yml; then \
       sed \
         -e "s#http://localhost:#http://${OPEN_MERCATO_DOCKER_REGISTRY_HOST}:#g" \
