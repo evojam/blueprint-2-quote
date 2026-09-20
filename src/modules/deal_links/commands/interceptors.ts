@@ -81,21 +81,37 @@ export const interceptors: CommandInterceptor[] = [
       }
 
       // Fail closed: an unscoped lookup here would search every tenant's links.
-      const tenantId = ctx.auth?.tenantId ?? null
+      //
+      // The tenant is read off our OWN source row rather than off `ctx.auth`, and that is
+      // a fix, not a stylistic choice. The PUBLIC acceptance path builds its command
+      // context with `auth: null` (`sales/api/quotes/accept/route.ts:130`) — the customer
+      // holds a quote token, not a session — and carries no `tenantId` anywhere on it. So
+      // `ctx.auth?.tenantId` was null for every customer acceptance, this hook returned
+      // here, and the order a customer created by signing was never linked to its deal.
+      // Only staff-side conversions ever linked.
+      //
+      // Scoping by organization alone is safe for finding that row: an organization id
+      // belongs to exactly one tenant, and on the acceptance path `selectedOrganizationId`
+      // is the converted quote's own `organizationId`. The tenant then comes from the row
+      // this module itself wrote, so nothing widens and no cross-module entity is read.
       const organizationId = ctx.selectedOrganizationId ?? ctx.auth?.orgId ?? null
-      if (!tenantId || !organizationId) return
+      if (!organizationId) return
 
       const em = (ctx.container.resolve('em') as EntityManager).fork()
 
       const source = await em.findOne(DealDocumentLink, {
         documentId: quoteId,
         documentKind: 'quote',
-        tenantId,
         organizationId,
         deletedAt: null,
       })
       // The quote did not come from a deal. Not our business.
       if (!source) return
+
+      // A link row with no tenant cannot scope the row we are about to write. Refuse
+      // rather than persist an unscoped one.
+      const tenantId = source.tenantId ?? null
+      if (!tenantId) return
 
       const existing = await em.findOne(DealDocumentLink, {
         documentId: orderId,
@@ -136,10 +152,12 @@ export const interceptors: CommandInterceptor[] = [
      * `ConvertUndoPayload` comment above for exactly what shape that is.
      */
     async afterUndo(undoContext, ctx) {
-      // Fail closed: an unscoped lookup here would search every tenant's links.
-      const tenantId = ctx.auth?.tenantId ?? null
+      // Fail closed: an unscoped lookup here would search every tenant's links. Scoped by
+      // organization only, for the same reason as `afterExecute` above — `ctx.auth` is
+      // null on the acceptance path, and an undo of a customer's conversion has to reach
+      // the row that conversion created.
       const organizationId = ctx.selectedOrganizationId ?? ctx.auth?.orgId ?? null
-      if (!tenantId || !organizationId) return
+      if (!organizationId) return
 
       const payload = extractUndoPayload<ConvertUndoPayload>(
         undoContext.logEntry as Parameters<typeof extractUndoPayload>[0],
@@ -152,7 +170,6 @@ export const interceptors: CommandInterceptor[] = [
       const link = await em.findOne(DealDocumentLink, {
         documentId: orderId,
         documentKind: 'order',
-        tenantId,
         organizationId,
         deletedAt: null,
       })
