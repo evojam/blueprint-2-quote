@@ -168,7 +168,7 @@ const rfqAnalysis = defineWorkflow({
       stepId: 'draft_quote',
       stepName: 'Draft a quote',
       stepType: 'AUTOMATED',
-      description: 'Proposes and auto-disposes one quote creation action from measurements and catalog matches.',
+      description: 'Proposes one quote creation action from measurements and catalog matches.',
       activities: [
         {
           activityId: 'invoke_quote_drafter',
@@ -182,6 +182,35 @@ const rfqAnalysis = defineWorkflow({
               workflowInstanceId: '{{workflow.instanceId}}',
             },
             onResult: { autoApproveThreshold: 0 },
+            outputMapping: {
+              quoteAction: 'proposalPayload.options.0.actions.0.payload',
+              quoteProposalId: 'proposalId',
+            },
+          },
+        },
+      ],
+    },
+    {
+      stepId: 'create_quote',
+      stepName: 'Create the approved quote',
+      stepType: 'AUTOMATED',
+      description: 'Executes the single auto-approved RFQ quote action.',
+      activities: [
+        {
+          activityId: 'create_approved_quote',
+          activityName: 'Create approved RFQ quote',
+          activityType: 'UPDATE_ENTITY',
+          async: false,
+          config: {
+            commandId: 'rfq_intake.quote.create',
+            input: {
+              tenantId: '{{workflow.tenantId}}',
+              organizationId: '{{workflow.organizationId}}',
+              proposalId: '{{context.quoteProposalId}}',
+              dealId: '{{context.quoteAction.dealId}}',
+              roomMeasurementsRunId: '{{context.quoteAction.roomMeasurementsRunId}}',
+              items: '{{context.quoteAction.items}}',
+            },
           },
         },
       ],
@@ -217,7 +246,8 @@ const rfqAnalysis = defineWorkflow({
     { transitionId: 't_measure', transitionName: 'Measure', fromStepId: 'extract_pdf', toStepId: 'measure_rooms', trigger: 'auto' },
     { transitionId: 't_match', transitionName: 'Match', fromStepId: 'measure_rooms', toStepId: 'match_catalog', trigger: 'auto' },
     { transitionId: 't_quote', transitionName: 'Draft quote', fromStepId: 'match_catalog', toStepId: 'draft_quote', trigger: 'auto' },
-    { transitionId: 't_review', transitionName: 'Review', fromStepId: 'draft_quote', toStepId: 'mark_review', trigger: 'auto' },
+    { transitionId: 't_create_quote', transitionName: 'Create quote', fromStepId: 'draft_quote', toStepId: 'create_quote', trigger: 'auto' },
+    { transitionId: 't_review', transitionName: 'Review', fromStepId: 'create_quote', toStepId: 'mark_review', trigger: 'auto' },
     { transitionId: 't_done', transitionName: 'Done', fromStepId: 'mark_review', toStepId: 'end', trigger: 'auto' },
   ],
 })

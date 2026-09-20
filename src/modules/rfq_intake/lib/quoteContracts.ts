@@ -98,12 +98,20 @@ export type PriceFailureCode =
 
 export type Basis = 'floor_area' | 'gross_wall_area' | 'net_wall_area' | 'count' | 'given'
 
+export type EstimateProvenance = {
+  id: string
+  confidence: number
+  estimationReason: string
+}
+
 export type Quantity = {
   /** Rounded to two decimals, always positive. */
   quantity: number
   unit: QuoteUnit
   /** Set only when a derived door/window count replaced a model-supplied one. */
   overriddenCount?: number
+  /** Every estimated linear input that contributed to this calculated quantity. */
+  estimateProvenance?: EstimateProvenance[]
 }
 
 /**
@@ -127,10 +135,7 @@ export type QuantityFailureCode =
   | 'scale_derived_mismatch'
   | 'no_openings_of_kind'
   | 'non_positive_quantity'
-
-/* ------------------------------------------------------------------ *
- * Room measurements — structural mirror of the V2 contract
- * ------------------------------------------------------------------ */
+  | 'estimate_provenance_invalid'
 
 /**
  * Mirrors the `data` object of `property_documents.room_measurements` as added by
@@ -147,12 +152,16 @@ export type LinearUnit = 'mm' | 'cm' | 'm' | 'in' | 'ft'
 export type AreaUnit = 'mm2' | 'cm2' | 'm2' | 'in2' | 'ft2'
 
 export type CalculationEligibility = 'eligible' | 'review_required'
-export type MeasurementMethod = 'printed' | 'scale_derived'
+export type MeasurementMethod = 'printed' | 'scale_derived' | 'estimated'
 
 export type LinearMeasurement = {
+  /** The source measurement ID is required when a value is estimated. */
+  id?: string
   value: number
   unit: LinearUnit
   method: MeasurementMethod
+  confidence?: number
+  estimationReason?: string
   calculationEligibility: CalculationEligibility
   calibrationId?: string | null
 }
