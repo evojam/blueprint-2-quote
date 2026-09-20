@@ -1,0 +1,145 @@
+
+# The escape hatch for `docker-main.yml`.
+#
+# That workflow builds on `vars.BUILD_RUNNER` (a GitHub-hosted larger runner) and
+# cancels a superseded run. Both are right for the normal case and both failed
+# together on 2026-09-20: the larger-runner pool stopped handing out machines, a
+# build sat queued for 17 minutes, and the next merge to main cancelled it. Every
+# following merge restarted that wait, so no image was published at all while the
+# demo needed one.
+#
+# This workflow removes each of those variables. It always runs on the standard
+# runner, it is never cancelled by a push, and it is started by hand.
+name: Manual release from main
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Trigger the demo deploy after both images publish'
+        type: boolean
+        default: true
+      opencode:
+        description: 'Rebuild the OpenCode agent image too'
+        type: boolean
+        default: true
+
+concurrency:
+  # Its OWN group. Sharing `docker-main` would let a push to main cancel the
+  # rescue build that the push's own run is failing to produce.
+  group: manual-release
+  # Never cancel a build somebody started on purpose.
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  build:
+    # Hardcoded, not `vars.BUILD_RUNNER`. The whole point is to not depend on the
+    # runner that is unavailable. Expect roughly 15-20 minutes here against the
+    # larger runner's ~6.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # Always main, whatever ref the dispatch was started from, so the image this
+      # publishes as `:main` is what main actually holds.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Short SHA
+        id: sha
+        # From the checked-out tree, not `GITHUB_SHA`: a dispatch started from
+        # another branch would otherwise tag main's image with that branch's sha.
+        run: echo "short=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runner
+          push: true
+          # ECS Fargate tasks here declare no runtime_platform, so they run x86_64.
+          platforms: linux/amd64
+          tags: |
+            ${{ env.IMAGE }}:main
+            ${{ env.IMAGE }}:sha-${{ steps.sha.outputs.short }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          # Same registry cache as the push build, so a manual run reuses whatever
+          # that one last published instead of starting cold.
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
+
+  opencode:
+    # Skippable: the agent image changes far less often than the app, and skipping
+    # it saves a minute when the rescue is only about app code. `deploy` treats a
+    # skipped job as satisfied, so the already-published `:opencode` tag is reused.
+    if: inputs.opencode
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          # The directory, not the repo root: the Dockerfile COPYs AGENTS.md,
+          # entrypoint.sh, agents/ and skills/ by bare name, relative to it.
+          context: ./docker/opencode
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.IMAGE }}:opencode
+            ${{ env.IMAGE }}:opencode-sha-${{ steps.sha.outputs.short }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+  deploy:
+    needs: [build, opencode]
+    # `always()` is what lets a SKIPPED `opencode` through; the explicit result
+    # checks are what still stop a FAILED one. Without the pair, skipping the
+    # agent image would silently skip the deploy as well.
+    if: >-
+      always() && inputs.deploy
+      && needs.build.result == 'success'
+      && needs.opencode.result != 'failure'
+      && needs.opencode.result != 'cancelled'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger the demo deploy in evojam/aws
+        env:
+          # Fine-grained PAT (or GitHub App token) with Actions: read and write on
+          # evojam/aws. The default GITHUB_TOKEN is scoped to THIS repository and
+          # cannot dispatch a workflow in another one.
+          GH_TOKEN: ${{ secrets.AWS_DEPLOY_DISPATCH_TOKEN }}
+        run: gh workflow run blueprint-2-quote.yml --repo evojam/aws --ref main
