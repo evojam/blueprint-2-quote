@@ -35,6 +35,56 @@ function buildBody(email: InboxEmail): string {
 }
 
 /**
+ * The sender of the e-mail an RFQ action was extracted from.
+ *
+ * The extraction model is asked for `customerEmail`, but it omits the field often
+ * enough to matter: every RFQ case opened on the demo after 2026-09-20 03:11 logged
+ * "RFQ action carries no customer e-mail", so no contact was guaranteed, no person was
+ * linked to the deal, and the quote the case produced had no customer on it. The
+ * address is in the inbox row the whole time, so it is read from there rather than
+ * hoped for from the model.
+ *
+ * Best effort, exactly like the activity below: a missing proposal or e-mail returns
+ * null and the case still opens.
+ */
+export async function loadRfqSenderContact(
+  ctx: InboxActionExecutionContext,
+  proposalId: string,
+): Promise<{ email: string; name: string | null } | null> {
+  const em = ctx.em as EntityManager
+  const scope = { tenantId: ctx.tenantId, organizationId: ctx.organizationId }
+
+  try {
+    const proposal = await findOneWithDecryption(
+      em,
+      InboxProposal,
+      { id: proposalId, ...scope, deletedAt: null },
+      undefined,
+      scope,
+    )
+    if (!proposal) return null
+
+    const email = await findOneWithDecryption(
+      em,
+      InboxEmail,
+      { id: proposal.inboxEmailId, ...scope, deletedAt: null },
+      undefined,
+      scope,
+    )
+    // `forwardedByAddress` is the address the message came from and is non-nullable on
+    // the row; `replyTo` wins when the thread names one, which is what a forwarded
+    // enquiry carries the real enquirer in.
+    const address = trimmed(email?.replyTo) ?? trimmed(email?.forwardedByAddress)
+    if (!address) return null
+
+    return { email: address, name: trimmed(email?.forwardedByName) }
+  } catch (error) {
+    logger.warn('Could not read the sender behind the RFQ action', { proposalId, err: error })
+    return null
+  }
+}
+
+/**
  * Logs the e-mail that opened an RFQ case as an `email` activity on that case.
  *
  * The deal comes FROM a message, so its timeline should start with that message rather
