@@ -4,6 +4,7 @@ import type { BootstrapData } from '@open-mercato/shared/lib/bootstrap'
 import { enabledModules } from '@/modules'
 import { applyApiRouteOverrides, applyModuleOverridesFromEnabledModules } from '@open-mercato/shared/modules/overrides'
 import { PUBLIC_QUOTE_ACCEPT_ROUTE_OVERRIDE } from '@/lib/publicQuoteAcceptOrigin'
+import { RFQ_QUOTE_SEND_ROUTE_OVERRIDE } from '@/modules/rfq_intake/lib/quoteSendOverride'
 import '@open-mercato/ai-assistant/modules/ai_assistant/lib/ai-overrides'
 
 import { modules } from '@/.mercato/generated/modules.bootstrap.generated'
@@ -59,6 +60,35 @@ applyModuleOverridesFromEnabledModules(enabledModules)
  * `createBootstrap(...)` executes.
  */
 applyApiRouteOverrides(PUBLIC_QUOTE_ACCEPT_ROUTE_OVERRIDE)
+
+/**
+ * Moves an RFQ case to `Oferta wysłana` when its quote is sent to the customer.
+ *
+ * Same registration seam and the same reason as the accept override above: naming a
+ * server handler in `src/modules.ts` pulls the installed sales route into the browser
+ * graph through `ClientBootstrap`. Why the route is replaced at all rather than hooked —
+ * the send route emits nothing and reaches none of the four UMES seams — is recorded on
+ * `RFQ_QUOTE_SEND_ROUTE_OVERRIDE` itself.
+ *
+ * Gated on the BUILT registry rather than on `enabledModules` or a new environment
+ * variable, and that distinction is load-bearing rather than pedantic.
+ *
+ * `enabledModules` is `src/modules.ts` evaluated right now, so it reports what the env
+ * vars ASK for. `modules` is `.mercato/generated/modules.bootstrap.generated.ts`, which
+ * is what `yarn generate` actually built — and it is the same registry the command bus
+ * resolves `rfq_intake.deal.advance` from. The two disagree whenever the generated
+ * artifacts were produced under different flags than the process now runs with, which is
+ * exactly the committed state of this repo: the `.ts` artifacts carry `record_locks` but
+ * no `rfq_intake`, while the `.mjs` ones (the CLI's) carry it.
+ *
+ * Gating on intent would therefore register the override on a runtime that has no such
+ * command: every send would log a caught "command not found" and no case would ever move,
+ * with nothing else to see. Gating on the built registry makes the override appear exactly
+ * when the command it calls does.
+ */
+if (modules.some((entry) => entry.id === 'rfq_intake')) {
+  applyApiRouteOverrides(RFQ_QUOTE_SEND_ROUTE_OVERRIDE)
+}
 
 registerEventModuleConfigs(eventModuleConfigs)
 registerMessageTypes(messageTypes, { replace: true })

@@ -40,7 +40,12 @@ export type RfqStageKey = (typeof RFQ_PIPELINE_STAGES)[number]['key']
 
 export const RFQ_STAGE_KEYS = RFQ_PIPELINE_STAGES.map((stage) => stage.key) as RfqStageKey[]
 
-function stageIndex(key: RfqStageKey): number {
+/**
+ * The position of a stage in the funnel, which is what "forward" and "backward" mean
+ * here. Exported because the send-side guard compares two positions and must use the
+ * same ordering the seeding and the lookups use.
+ */
+export function rfqStageIndex(key: RfqStageKey): number {
   return RFQ_PIPELINE_STAGES.findIndex((stage) => stage.key === key)
 }
 
@@ -148,24 +153,68 @@ export async function ensureRfqPipeline(em: EntityManager, scope: Scope): Promis
 }
 
 /**
- * The id of one RFQ stage, or `null` when the funnel has not been seeded yet.
+ * The tenant's RFQ funnel, resolved in both directions.
+ *
+ * `stageIdByKey` answers "where should this case go", which is what a step moving a case
+ * needs. `keyByStageId` answers "where does this case stand", which is what a caller
+ * deciding WHETHER to move it needs — the deal carries a `pipelineStageId`, a per-tenant
+ * row id that means nothing until it is mapped back onto a position in this funnel.
+ *
+ * A key is absent from `stageIdByKey` when the tenant's funnel is missing that stage.
+ * That is a real state: `ensureRfqPipeline` tops stages up, but nothing forces an
+ * operator's hand between seeds.
+ */
+export type RfqFunnel = {
+  pipelineId: string
+  stageIdByKey: Partial<Record<RfqStageKey, string>>
+  keyByStageId: Map<string, RfqStageKey>
+}
+
+/**
+ * Loads the RFQ funnel, or `null` when it has not been seeded in this scope.
  *
  * Read-only on purpose: a command running inside an accepted action or a workflow step
  * must not quietly create CRM structure. Seeding is `mercato rfq_intake seed-pipeline`
  * or `mercato init`, and a missing funnel is reported, not papered over.
+ *
+ * Stages are matched by position first and by label second, the same order
+ * `ensureRfqPipeline` uses when it decides whether a stage already exists — so a funnel
+ * whose labels an operator rewrote still resolves, and the two functions cannot disagree
+ * about which row is which stage.
+ */
+export async function loadRfqFunnel(em: EntityManager, scope: Scope): Promise<RfqFunnel | null> {
+  const pipelines = await loadPipelines(em, scope)
+  const pipeline = pipelines.find((candidate) => matchesName(candidate.name, RFQ_PIPELINE_NAME))
+  if (!pipeline) return null
+  const stages = await loadStages(em, scope, pipeline.id)
+
+  const stageIdByKey: Partial<Record<RfqStageKey, string>> = {}
+  const keyByStageId = new Map<string, RfqStageKey>()
+
+  for (const [index, definition] of RFQ_PIPELINE_STAGES.entries()) {
+    const stage =
+      stages.find((candidate) => candidate.order === index) ??
+      stages.find((candidate) => matchesName(candidate.label, definition.label))
+    if (!stage) continue
+    stageIdByKey[definition.key] = stage.id
+    // On a funnel with a stage missing, the label fallback can resolve two definitions to
+    // the same row. The earliest position wins, because reading a case as EARLIER than it
+    // is only ever costs a redundant forward move, while the opposite would let the
+    // send-side guard refuse a move that should have happened.
+    if (!keyByStageId.has(stage.id)) keyByStageId.set(stage.id, definition.key)
+  }
+
+  return { pipelineId: pipeline.id, stageIdByKey, keyByStageId }
+}
+
+/**
+ * The id of one RFQ stage, or `null` when the funnel has not been seeded yet.
  */
 export async function resolveRfqStageId(
   em: EntityManager,
   scope: Scope,
   key: RfqStageKey,
 ): Promise<string | null> {
-  const pipelines = await loadPipelines(em, scope)
-  const pipeline = pipelines.find((candidate) => matchesName(candidate.name, RFQ_PIPELINE_NAME))
-  if (!pipeline) return null
-  const stages = await loadStages(em, scope, pipeline.id)
-  const index = stageIndex(key)
-  const stage =
-    stages.find((candidate) => candidate.order === index) ??
-    stages.find((candidate) => matchesName(candidate.label, RFQ_PIPELINE_STAGES[index].label))
-  return stage?.id ?? null
+  const funnel = await loadRfqFunnel(em, scope)
+  return funnel?.stageIdByKey[key] ?? null
 }
