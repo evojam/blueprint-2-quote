@@ -153,12 +153,14 @@ describe('rfq_intake.quote.create scope and deal guards', () => {
     await expect(createQuoteCommand.execute(validInput, makeCtx({ deal: null }))).rejects.toThrow(/Deal/)
   })
 
-  it('creates nothing and names the refusal when an item resolves to no product', async () => {
-    const result = await createQuoteCommand.execute(validInput, makeCtx())
-
-    // An empty catalog means the single item is dropped; a quote with no lines is
-    // never created, and the warning carries the index the caller wrote.
-    expect(result).toEqual({ quoteId: null, lineCount: 0, warnings: ['product_not_found:0'] })
+  it('creates nothing and fails loudly when an item resolves to no product', async () => {
+    // An empty catalog means the single item is dropped. Nothing survives, so the
+    // command fails rather than reporting a quote-shaped success with no lines in it,
+    // and the error carries the index the caller wrote.
+    await expect(createQuoteCommand.execute(validInput, makeCtx())).rejects.toMatchObject({
+      status: 422,
+      body: { warnings: ['product_not_found:0'] },
+    })
   })
 })
 
@@ -199,19 +201,21 @@ describe('rfq_intake.quote.create room-measurements run guard', () => {
     await expect(createQuoteCommand.execute(validInput, makeCtx({ run }))).rejects.toThrow(/run/i)
   })
 
-  it('accepts a valid result and proceeds to the items rather than aborting', async () => {
+  it('accepts a valid result and proceeds to the items rather than aborting on the run', async () => {
     // The guard's job ends once the run is usable. Item resolution then runs and, with
-    // an empty catalog, drops the single item instead of throwing.
-    const result = await createQuoteCommand.execute(validInput, makeCtx())
-
-    expect(result).toEqual({ quoteId: null, lineCount: 0, warnings: ['product_not_found:0'] })
+    // an empty catalog, refuses on the item rather than on the run.
+    await expect(createQuoteCommand.execute(validInput, makeCtx())).rejects.toMatchObject({
+      status: 422,
+      body: { warnings: ['product_not_found:0'] },
+    })
   })
 
   it('accepts the persisted research envelope returned by the agent runtime', async () => {
     const run = acceptedRun({ output: { kind: 'research', data: measurementResult([]) } })
 
-    const result = await createQuoteCommand.execute(validInput, makeCtx({ run }))
-
-    expect(result).toEqual({ quoteId: null, lineCount: 0, warnings: ['product_not_found:0'] })
+    await expect(createQuoteCommand.execute(validInput, makeCtx({ run }))).rejects.toMatchObject({
+      status: 422,
+      body: { warnings: ['product_not_found:0'] },
+    })
   })
 })
