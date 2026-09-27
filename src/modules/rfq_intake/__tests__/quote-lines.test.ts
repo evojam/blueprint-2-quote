@@ -126,26 +126,24 @@ describe('rfq_intake.quote.create line assembly', () => {
     })
     resolveQuantity.mockReturnValue(area(8))
 
-    const result = await createQuoteCommand.execute(
-      input([{ catalogProductId: doorId, basis: 'floor_area', roomIds: ['room-1'] }]),
-      makeCtx(),
-    )
+    await expect(
+      createQuoteCommand.execute(
+        input([{ catalogProductId: doorId, basis: 'floor_area', roomIds: ['room-1'] }]),
+        makeCtx(),
+      ),
+    ).rejects.toMatchObject({ status: 422, body: { warnings: ['unit_mismatch:0'] } })
 
-    expect(result.quoteId).toBeNull()
-    expect(result.warnings).toContain('unit_mismatch:0')
     expect(resolveUnitPrice).not.toHaveBeenCalled()
     expect(salesCalls).toHaveLength(0)
   })
 
-  it('creates no quote at all when every item is dropped', async () => {
+  it('fails the whole request when every item is dropped, instead of reporting an empty quote', async () => {
     loadQuotableProduct.mockResolvedValue({ ok: false, code: 'product_not_found' })
 
-    const result = await createQuoteCommand.execute(
-      input([{ catalogProductId: paintId, basis: 'count', count: 2 }]),
-      makeCtx(),
-    )
+    await expect(
+      createQuoteCommand.execute(input([{ catalogProductId: paintId, basis: 'count', count: 2 }]), makeCtx()),
+    ).rejects.toMatchObject({ status: 422, body: { warnings: ['product_not_found:0'] } })
 
-    expect(result).toEqual({ quoteId: null, lineCount: 0, warnings: ['product_not_found:0'] })
     expect(salesCalls).toHaveLength(0)
   })
 
@@ -345,12 +343,13 @@ describe('rfq_intake.quote.create line assembly', () => {
     loadQuotableProduct.mockResolvedValue(paint())
     resolveQuantity.mockReturnValue({ ok: false, code: 'ceiling_height_missing' })
 
-    const result = await createQuoteCommand.execute(
-      input([{ catalogProductId: paintId, basis: 'gross_wall_area', roomIds: ['room-1'] }]),
-      makeCtx(),
-    )
+    await expect(
+      createQuoteCommand.execute(
+        input([{ catalogProductId: paintId, basis: 'gross_wall_area', roomIds: ['room-1'] }]),
+        makeCtx(),
+      ),
+    ).rejects.toMatchObject({ status: 422, body: { warnings: ['ceiling_height_missing:0'] } })
 
-    expect(result.warnings).toEqual(['ceiling_height_missing:0'])
     expect(salesCalls).toHaveLength(0)
   })
 
@@ -391,12 +390,10 @@ describe('rfq_intake.quote.create line assembly', () => {
   it('creates no link when no quote was created', async () => {
     loadQuotableProduct.mockResolvedValue({ ok: false, code: 'product_not_found' })
 
-    const result = await createQuoteCommand.execute(
-      input([{ catalogProductId: paintId, basis: 'count', count: 2 }]),
-      makeCtx(),
-    )
+    await expect(
+      createQuoteCommand.execute(input([{ catalogProductId: paintId, basis: 'count', count: 2 }]), makeCtx()),
+    ).rejects.toMatchObject({ status: 422 })
 
-    expect(result.quoteId).toBeNull()
     expect(linkCalls).toHaveLength(0)
   })
 

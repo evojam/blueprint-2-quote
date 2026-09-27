@@ -267,8 +267,18 @@ const createQuoteCommand: CommandHandler<Record<string, unknown>, QuoteCreateRes
       else for (const index of entry.group.indices) warnings.push(`currency_unsupported:${index}`)
     }
 
+    // Thrown, not returned. Every refusal above drops one item and lets the rest
+    // through, but an items list where nothing survived is a failed quote, and
+    // returning it as a result made the workflow record a success: the activity
+    // reported `executed: true`, the instance auto-completed, and the only trace of
+    // the failure was a warnings array inside an activity result nobody reads unless
+    // they already suspect the quote is missing. The warnings travel with the error so
+    // the reason stays exactly as specific as it was.
     if (kept.length === 0) {
-      return { quoteId: null, lineCount: 0, warnings }
+      throw new CrudHttpError(422, {
+        error: 'No quote line survived validation',
+        warnings,
+      })
     }
 
     const lines = kept.map(({ group, price }) => ({
